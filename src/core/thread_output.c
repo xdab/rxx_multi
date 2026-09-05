@@ -7,12 +7,14 @@ void *output_thread_fn(void *arg)
 {
     struct output_state *s = arg;
 
-    while (!do_exit)
+    while (1)
     {
         pthread_mutex_lock(&s->ready_m);
-        while (!s->data_ready && !do_exit)
+        while (!s->data_ready &&
+               !(do_exit && s->seq_written == s->seq_packed))
             pthread_cond_wait(&s->ready, &s->ready_m);
-        if (do_exit && !s->data_ready)
+        if (do_exit && !s->data_ready &&
+            s->seq_written == s->seq_packed)
         {
             pthread_mutex_unlock(&s->ready_m);
             break;
@@ -37,6 +39,7 @@ void *output_thread_fn(void *arg)
         }
 
         pthread_rwlock_unlock(&s->rw);
+        s->seq_written++;
     }
 
     return 0;

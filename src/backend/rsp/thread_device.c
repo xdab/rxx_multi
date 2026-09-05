@@ -44,11 +44,34 @@ static void record_chunk(struct device_state *s, int complex_len)
     }
 }
 
+/* Lossless handoff: block until every target demod has fully consumed
+ * the previous chunk (seq_processed == seq_delivered) before this chunk
+ * overwrites s->buf / d->input. Abort on do_exit. */
+static void wait_demods_drained(struct demod_state *single)
+{
+    int n = single ? 1 : freq_len;
+
+    for (int i = 0; i < n; i++)
+    {
+        struct demod_state *d = single ? single : &demods[i];
+        while (!do_exit && d->seq_processed != d->seq_delivered)
+            usleep(50);
+    }
+}
+
 static void deliver_buf(int complex_len)
 {
     struct device_state *s = &device;
     struct demod_state *d = s->demod_target;
     int i;
+
+    if (do_exit)
+        return;
+
+    wait_demods_drained(d);
+
+    if (do_exit)
+        return;
 
     if (s->record_file)
         record_chunk(s, complex_len);
@@ -58,6 +81,7 @@ static void deliver_buf(int complex_len)
         pthread_rwlock_wrlock(&d->rw);
         memcpy(d->input.samples, s->buf, sizeof(s->buf[0]) * (size_t)complex_len);
         d->input.len = complex_len;
+        d->seq_delivered++;
         pthread_rwlock_unlock(&d->rw);
 
         pthread_mutex_lock(&d->ready_m);
@@ -76,6 +100,7 @@ static void deliver_buf(int complex_len)
             memcpy(cd->input.samples, s->buf,
                    sizeof(s->buf[0]) * (size_t)complex_len);
             cd->input.len = complex_len;
+            cd->seq_delivered++;
             pthread_rwlock_unlock(&cd->rw);
 
             pthread_mutex_lock(&cd->ready_m);
@@ -222,6 +247,11 @@ void *file_input_thread_fn(void *arg)
     }
 
     fclose(f);
+
+    /* EOF drain: every delivered chunk must be fully consumed (and its
+     * audio flagged to the output) before shutdown begins */
+    wait_demods_drained(s->demod_target);
+
     fprintf(stderr, "IQ input file exhausted, exiting...\n");
     do_exit = 1;
     return 0;

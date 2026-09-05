@@ -117,6 +117,11 @@ struct demod_state
     struct iq_buffer input;
     struct real_buffer output;
     int data_ready;
+    /* Lossless handoff: producer bumps seq_delivered after posting a
+     * chunk, demod bumps seq_processed after consuming it; equal counts
+     * mean the demod holds no unconsumed chunk */
+    volatile unsigned long seq_delivered;
+    volatile unsigned long seq_processed;
     pthread_rwlock_t rw;
     pthread_cond_t ready;
     pthread_mutex_t ready_m;
@@ -164,6 +169,11 @@ struct output_state
     int result_len;
     int rate;
     int data_ready;
+    /* Lossless handoff: demod bumps seq_packed after posting audio,
+     * output bumps seq_written after writing it; equal counts mean the
+     * output has drained everything packed so far */
+    volatile unsigned long seq_packed;
+    volatile unsigned long seq_written;
     pthread_rwlock_t rw;
     pthread_cond_t ready;
     pthread_mutex_t ready_m;

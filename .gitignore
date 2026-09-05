@@ -23,6 +23,9 @@ __pycache__/
 *.raw
 *.cf32
 
+# Experiment captures (recordings + logs)
+run*/
+
 # Throwaway captures, plots and scratch scripts
 *.f32
 *.png

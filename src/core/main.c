@@ -393,6 +393,13 @@ int main(int argc, char **argv)
     device_signal_exit();
     pthread_join(device.thread, NULL);
 
+    /* Stop the producer completely before draining consumers: RSP
+     * streaming runs on API-internal callback threads that only end at
+     * Uninit, and no recording/output file may be closed or demod joined
+     * while a callback can still be mid-delivery. */
+    if (!file_input)
+        device_stream_stop();
+
     if (device.record_file)
     {
         fclose(device.record_file);
@@ -418,9 +425,6 @@ int main(int argc, char **argv)
     }
 
     if (!file_input)
-    {
-        device_stream_stop();
         device_close();
-    }
     return r >= 0 ? r : -r;
 }

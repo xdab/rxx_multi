@@ -3,6 +3,7 @@
 #include "thread.h"
 #include "types.h"
 #include <math.h>
+#include <unistd.h>
 
 static int16_t float_to_pcm16(float sample)
 {
@@ -34,12 +35,14 @@ void *demod_thread_fn(void *arg)
     struct demod_state *d = arg;
     struct output_state *o = d->output_target;
 
-    while (!do_exit)
+    while (1)
     {
         pthread_mutex_lock(&d->ready_m);
-        while (!d->data_ready && !do_exit)
+        while (!d->data_ready &&
+               !(do_exit && d->seq_processed == d->seq_delivered))
             pthread_cond_wait(&d->ready, &d->ready_m);
-        if (do_exit && !d->data_ready)
+        if (do_exit && !d->data_ready &&
+            d->seq_processed == d->seq_delivered)
         {
             pthread_mutex_unlock(&d->ready_m);
             break;
@@ -61,12 +64,19 @@ void *demod_thread_fn(void *arg)
             pthread_mutex_unlock(&o->net.tcp.clients_m);
 
             if (clients == 0)
-                continue; /* no clients, skip pipeline processing */
+            {
+                /* Chunk consumed and discarded - unblock the producer */
+                d->seq_processed++;
+                continue;
+            }
         }
 
         pthread_rwlock_wrlock(&d->rw);
         int status = pipeline_process(&d->pipeline, &d->input, &d->output);
         pthread_rwlock_unlock(&d->rw);
+
+        /* Input fully consumed - the producer may reuse it now */
+        d->seq_processed++;
 
         if (status != 0)
         {
@@ -80,8 +90,14 @@ void *demod_thread_fn(void *arg)
             continue;
         }
 
+        /* Lossless handoff: wait until the output stage has written
+         * everything packed so far before overwriting o->result */
+        while (!do_exit && o->seq_written != o->seq_packed)
+            usleep(100);
+
         pthread_rwlock_wrlock(&o->rw);
         pack_output_samples(o, d->output.samples, d->output.len);
+        o->seq_packed++;
         pthread_rwlock_unlock(&o->rw);
 
         pthread_mutex_lock(&o->ready_m);
