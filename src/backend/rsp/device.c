@@ -280,6 +280,12 @@ int device_apply_settings(void)
     {
         ch->ctrlParams.agc.enable = sdrplay_api_AGC_CTRL_EN;
         ch->ctrlParams.agc.setPoint_dBfs = -30;
+        /* API AGC still validates the gain fields as its starting point:
+         * unset (-1) must be replaced with valid lowest-level defaults */
+        if (device.gain_rdb < 0)
+            device.gain_rdb = DEFAULT_GRDB;
+        if (device.lna_state < 0)
+            device.lna_state = DEFAULT_LNA_STATE;
     }
     else
     {
