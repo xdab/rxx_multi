@@ -27,9 +27,9 @@
 #define MAX_CAPTURE_RATE 8000000
 #define RSP_MAX_SNAP_RATE 4000000
 
-/* Recommended manual gain defaults (lowest overall levels) */
+/* Recommended gain defaults: max IF gain reduction, max LNA gain */
 #define DEFAULT_GRDB 59
-#define DEFAULT_LNA_STATE 2
+#define DEFAULT_LNA_STATE 0
 
 static sdrplay_api_DeviceT devices[SDRPLAY_MAX_DEVICES];
 static unsigned int num_devices = 0;

@@ -12,9 +12,9 @@
 int device_stream_start(sdrplay_api_CallbackFnsT *cb_fns);
 sdrplay_api_DeviceT *device_handle(void);
 
-/* Recommended manual gain defaults (lowest overall levels) */
+/* Recommended gain defaults: max IF gain reduction, max LNA gain */
 #define DEFAULT_GRDB 59
-#define DEFAULT_LNA_STATE 2
+#define DEFAULT_LNA_STATE 0
 
 /* SDRplay stream callback - converts ZIF samples and delivers to demods.
  * Sample format: 8-bit signed, left-justified in a 16-bit word.
