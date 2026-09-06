@@ -178,33 +178,6 @@ int dsp_resample_output(struct channel_pipeline *pipeline, struct real_buffer *b
     return 0;
 }
 
-float dsp_rms_complex(const float complex *samples, int len)
-{
-    if (len <= 0)
-        return 0.0f;
-
-    float power = 0.0f;
-    float sum_i = 0.0f;
-    float sum_q = 0.0f;
-    for (int i = 0; i < len; i++)
-    {
-        float re = crealf(samples[i]);
-        float im = cimagf(samples[i]);
-        sum_i += re;
-        sum_q += im;
-        power += re * re + im * im;
-    }
-
-    float avg_i = sum_i / (float)len;
-    float avg_q = sum_q / (float)len;
-    float dc_power = avg_i * avg_i + avg_q * avg_q;
-    float variance = (power / (float)len) - dc_power;
-    if (variance < 0.0f)
-        variance = 0.0f;
-
-    return sqrtf(variance * 0.5f);
-}
-
 void dsp_apply_deemphasis(struct channel_pipeline *pipeline, struct real_buffer *buffer)
 {
     if (pipeline == NULL || buffer == NULL || !pipeline->deemph_enabled || buffer->len <= 0)

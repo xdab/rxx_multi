@@ -21,7 +21,6 @@ drift to babysit).
 - Per-channel modulation: FM, wideband FM, AM, USB, LSB, raw I/Q
 - Per-channel output: TCP server, UDP client, file, or stdout
 - Frequency-shift tuning — channels can be anywhere within the capture bandwidth
-- Squelch with configurable threshold and delay
 - FM de-emphasis filter (75us) and DC blocking filter
 - Raw IQ file input (`-I`) and recording (`-R`) for offline testing and 1:1 replay
 - Backend-native gain control (see Options)
@@ -94,10 +93,10 @@ Receive audio with netcat:
 nc localhost 8000 | aplay -r 24k -f S16_LE -t raw -c 1
 ```
 
-Monitor two ham repeaters with squelch:
+Monitor two ham repeaters:
 
 ```bash
-rtl_multi -f 145.5M,146.52M -M fm -g 40 -s 12k -r 24k -t 50 \
+rtl_multi -f 145.5M,146.52M -M fm -g 40 -s 12k -r 24k \
   -O tcp:8000,tcp:8001
 ```
 
@@ -119,8 +118,6 @@ Universal flags (both binaries):
 | `-O` | Output per channel: `tcp:port`, `udp:host:port`, or `FILENAME` (raw audio; no commas) | stdout  |
 | `-s` | Channel sample rate (demod input)                                                     | 12k     |
 | `-r` | Audio output rate                                                                     | 48k     |
-| `-l` | Squelch level (0 = off)                                                               | 0       |
-| `-t` | Squelch delay (negative = exit on squelch)                                            | 10      |
 | `-E` | Enable option: `dc`, `deemp` (use multiple `-E` flags)                                | off     |
 | `-I` | Raw IQ file input (test mode, no device): `-I FILE:RATE:CENTER`                       | -       |
 | `-R` | Record raw baseband IQ to FILE (CF32, replayable with `-I`)                           | -       |

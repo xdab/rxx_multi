@@ -61,7 +61,7 @@ Three-stage pipeline, one pthread per stage per channel:
    transient). `-I` replaces the hardware source with a CF32 file read in the
    same chunk sizes, as fast as the pipeline consumes it (unpaced).
 2. **Demod** — waits on condvar, runs `pipeline_process`: NCO shift → FIR
-   decimation → squelch → demodulate → de-emphasis → DC block → audio
+   decimation → demodulate → de-emphasis → DC block → audio
    resample.
 3. **Output** — waits on condvar, writes PCM16 to TCP clients, UDP socket,
    file, or stdout.
@@ -167,7 +167,7 @@ CLI parity (`-s` sets both `rate_in` and `rate_out`).
   declarations in `options.h`/`device.h`). Backend-private stuff belongs in
   `src/backend/<name>/`.
 - **CLI parity between the binaries is the contract:** universal flags
-  (`-d -f -M -O -s -r -l -t -E dc/deemp -I -R -x`) behave identically; gain
+  (`-d -f -M -O -s -r -E dc/deemp -I -R -x`) behave identically; gain
   flags are backend-specific by nature (`-g/-p/-T` RTL, `-g/-L` RSP) and a
   foreign flag must fail loudly (`invalid option`) rather than silently.
 - **Max 128 channels** (`FREQUENCIES_LIMIT`).

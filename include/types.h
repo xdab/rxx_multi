@@ -60,10 +60,6 @@ struct channel_pipeline
     int output_rate;
     int downsample_factor;
     float output_scale;
-    int squelch_level;
-    int squelch_delay;
-    int terminate_on_squelch;
-    int squelch_hits;
     int deemph_enabled;
     float deemph_alpha;
     int dc_block_enabled;

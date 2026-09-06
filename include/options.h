@@ -35,9 +35,6 @@ typedef struct
     float rate_in;
     float rate_out;
     float rate_audio;
-    int squelch_level;
-    int conseq_squelch;
-    int terminate_on_squelch;
 
     int dc_block;
     int deemph;

@@ -214,9 +214,6 @@ int main(int argc, char **argv)
         pipeline->input_rate = rate_channel;
         pipeline->demod_rate = rate_channel;
         pipeline->output_rate = (int)opts.rate_audio;
-        pipeline->squelch_level = opts.squelch_level;
-        pipeline->squelch_delay = opts.conseq_squelch;
-        pipeline->terminate_on_squelch = (opts.channel_count == 1) ? opts.terminate_on_squelch : 0;
         pipeline->downsample_factor = downsample;
         pipeline->dc_block_enabled = opts.dc_block;
         pipeline->deemph_enabled = opts.deemph;

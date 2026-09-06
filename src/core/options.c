@@ -58,7 +58,6 @@ static int apply_modulation(channel_t *ch, const char *arg, options_t *opts)
         opts->rate_in = WBFM_SAMPLE_RATE;
         opts->rate_out = WBFM_SAMPLE_RATE;
         opts->deemph = 1;
-        opts->squelch_level = 0;
         ch->mode = DEMOD_FM;
     }
     else
@@ -226,14 +225,13 @@ void options_usage(void)
             "\t           or -f 145M,145.5,146.52M (multi-channel operation)\n"
             "\t[-M modulation (default: fm)]\n"
             "\t    fm, wbfm, raw, am, usb, lsb\n"
-            "\t    wbfm == -M fm -s 170k -l 0 -E deemp\n"
+            "\t    wbfm == -M fm -s 170k -E deemp\n"
             "\t    raw mode outputs 2x16 bit IQ pairs\n"
             "\t[-s channel_sample_rate (default: 12k)]\n"
             "\t[-r output_sample_rate (default: 48k)]\n"
             "\t[-d device_index or serial (default: 0)]\n");
     device_print_options();
     fprintf(stderr,
-            "\t[-l squelch_level (default: 0/off)]\n"
             "\t[-E enable_option (default: none)]\n"
             "\t    use multiple -E to enable multiple options\n"
             "\t    dc:      enable dc blocking filter\n"
@@ -253,8 +251,6 @@ void options_usage(void)
             "\t    rate/center are printed at startup as the exact -I invocation\n"
             "\n"
             "Experimental options:\n"
-            "\t[-t squelch_delay (default: 10)]\n"
-            "\t    +values delay muting, -values will exit on squelch\n"
             "\t[-x seconds - exit gracefully after SECONDS of running]\n"
             "\n"
             "Produces signed 16 bit ints, use Sox or aplay to hear them.\n"
@@ -336,9 +332,8 @@ int options_parse(int argc, char **argv, options_t *opts)
     opts->rate_in = DEFAULT_SAMPLE_RATE;
     opts->rate_out = DEFAULT_SAMPLE_RATE;
     opts->rate_audio = DEFAULT_OUTPUT_RATE;
-    opts->conseq_squelch = 10;
 
-    while ((opt = getopt(argc, argv, "d:f:g:I:L:s:l:t:r:p:R:x:E:M:hTO:")) != -1)
+    while ((opt = getopt(argc, argv, "d:f:g:I:L:s:r:p:R:x:E:M:hTO:")) != -1)
     {
         switch (opt)
         {
@@ -401,23 +396,12 @@ int options_parse(int argc, char **argv, options_t *opts)
                 return -1;
             }
             break;
-        case 'l':
-            opts->squelch_level = (int)atof(optarg);
-            break;
         case 's':
             opts->rate_in = atofs(optarg);
             opts->rate_out = atofs(optarg);
             break;
         case 'r':
             opts->rate_audio = atofs(optarg);
-            break;
-        case 't':
-            opts->conseq_squelch = (int)atof(optarg);
-            if (opts->conseq_squelch < 0)
-            {
-                opts->conseq_squelch = -opts->conseq_squelch;
-                opts->terminate_on_squelch = 1;
-            }
             break;
         case 'E':
             if (strcmp("dc", optarg) == 0)

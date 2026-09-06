@@ -84,12 +84,6 @@ void *demod_thread_fn(void *arg)
             continue;
         }
 
-        if (pipeline_is_squelched(&d->pipeline))
-        {
-            d->pipeline.squelch_hits = d->pipeline.squelch_delay + 1;
-            continue;
-        }
-
         /* Lossless handoff: wait until the output stage has written
          * everything packed so far before overwriting o->result */
         while (!do_exit && o->seq_written != o->seq_packed)
