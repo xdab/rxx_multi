@@ -298,7 +298,12 @@ int device_apply_settings(void)
     {
         ch->ctrlParams.decimation.enable = 1;
         ch->ctrlParams.decimation.decimationFactor = (unsigned char)decim_factor;
-        ch->ctrlParams.decimation.wideBandSignal = 1;
+        /* wideBandSignal is documented for signals >1.6 MHz wide; this
+         * tool demodulates narrowband channels, so use the narrowband
+         * decimation path. The wideband setting also makes the host
+         * daemon pump ~6000 tiny IPC callbacks/s at 2 MS/s, which can
+         * starve a loaded CPU and drip the stream. */
+        ch->ctrlParams.decimation.wideBandSignal = 0;
     }
 
     settings_applied = 1;
