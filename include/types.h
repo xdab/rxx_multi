@@ -76,10 +76,6 @@ struct channel_pipeline
     float complex decimator_tail[256];
     unsigned int decimator_tail_len;
     demodulate_fn demodulate;
-    /* Per-stage CPU time accumulators (seconds) + chunk count; read by
-     * the demod thread's periodic profile printout */
-    double t_shift, t_decim, t_demod, t_iir, t_resamp;
-    unsigned long chunks_processed;
 };
 
 /* Device state - capture parameters plus the union of all backend gain

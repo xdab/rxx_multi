@@ -1,0 +1,75 @@
+# RSP backend: potential improvements
+
+Findings from debugging periodic audio dropouts (0.9 s of audio, then
+0.7 s of silence, repeating) that affected only `rsp_multi`, never
+`rtl_multi`, when streaming demodulated audio over TCP. This document
+records the root cause, the fix that shipped, and the improvement ideas
+that were left on the table, with the reasoning behind each. It is
+self-contained: no knowledge of the original debugging session required.
+
+## Root cause (as measured, 2026-09)
+
+- The RSP path never delivers samples itself: the SDRplay API daemon
+  (`sdrplay_apiService`) decimates the 8 MHz ADC stream on the host CPU
+  and hands small packets (~336 samples, i.e. 168 us of signal) to the
+  client over IPC — roughly 6000 callbacks/s at a 2 MS/s capture rate.
+- Instrumentation (temporary, since removed) showed our pipeline fully
+  able to keep up (demod + output + TCP well inside the 4.1 ms/chunk
+  budget), while the daemon was pinned at 100% of one core and delivered
+  only ~1.15 MS/s instead of 2.0. The missing 43% was dropped inside the
+  API's ring — silent, unrecoverable, and exactly the audible duty cycle.
+- RTL-SDR is immune by architecture: librtlsdr moves USB data straight
+  into our process. No daemon, no host-side decimation, no IPC pump.
+- The trigger was our own config: API decimation was set with
+  `wideBandSignal = 1`, a mode documented for signals wider than 1.6 MHz.
+  **Fix shipped:** `wideBandSignal = 0` (rsp/device.c) — the correct
+  narrowband decimation path, which is also far cheaper in the daemon.
+  With it, the daemon sustains the full 5952 callbacks/s and the
+  dropouts disappear.
+
+Lesson: on the RSP path the daemon is part of the real-time budget.
+Treat daemon CPU like capture bandwidth — a resource that can run out
+and fail *silently*.
+
+## Potential follow-ups
+
+1. **Decimation x8 for narrow captures (1 MS/s snap point).**
+   The RSP1 ADC always runs at 8 MHz; with x1/x2/x4 decimation the
+   capture rate snaps up to {8, 4, 2} MHz, so even a ~0.5 MHz channel
+   plan pays a 2 MS/s capture and the tight 4.1 ms demod budget that
+   comes with it. The API accepts larger factors; x8 would put 1 MS/s in
+   the snap set, halving per-channel demod CPU. The margin after the fix
+   is thin (demod wall cycle ~4.2 ms vs the 4.096 ms budget at 2 MS/s),
+   so this is the cheapest way to widen it. Caveats: touches the rate
+   model (`device_plan_capture`, RTL parity contract), and the x8 path's
+   output quality needs an A/B against x4. Note it lightens *our* CPU;
+   the daemon's IPC callback rate is set by its packet granularity and
+   may not improve.
+
+2. **Restore demod headroom (two-stage decimation).**
+   The channel decimator is a single kaiser FIR run at the full capture
+   rate. Splitting it (e.g. cheap x8 half-band first, then the existing
+   narrow x16 stage) cuts per-sample input cost several-fold on every
+   backend. Pure DSP-internal change, no behavior or interface impact;
+   protects weak machines (Raspberry Pi class) where the lossless
+   producer handoff couples all channels to the slowest consumer.
+
+3. **Emergency low-rate mode (fsHz = 2 MHz, API decimation off).**
+   If the daemon is ever the bottleneck again, running the ADC at 2 MHz
+   natively removes all host-side decimation work. Known and accepted
+   cost: RSP1 low-rate ZIF is 8-bit left-justified (~18 dB worse
+   quantization floor). Acceptable for FM voice in a pinch; not a
+   default.
+
+4. **Pre-create pipeline filters.**
+   Demod filter objects (kaiser decimator, resampler) are created lazily
+   on the first processed chunk — an ~80 ms one-time spike per channel,
+   visible as a stall right when a TCP client connects. Creating them at
+   channel setup removes the spike. Small, easy win.
+
+5. **Daemon health monitoring.**
+   The failure mode above is invisible to our code: the API drops
+   samples internally, and every stage of ours looks healthy. Comparing
+   the configured capture rate against the actual chunk delivery rate
+   (one counter, checked once per second) would turn a "mystery gap"
+   into an actionable `WARNING: API delivering 1.15 of 2.00 MS/s`.

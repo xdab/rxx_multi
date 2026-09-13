@@ -44,17 +44,6 @@ static void record_chunk(struct device_state *s, int complex_len)
     }
 }
 
-/* Total chunks handed to demods (heartbeat + gap accounting) */
-static volatile unsigned long chunks_delivered;
-/* Cumulative time spent blocked waiting for demods to drain (s) */
-static double drain_wait_total;
-static unsigned long drain_wait_count;
-/* API arrival accounting: updated on the API callback thread, read by
- * the device thread's heartbeat - benign data races are acceptable */
-static volatile unsigned long api_cb_count;
-static volatile unsigned long api_cb_samples;
-static volatile double api_gap_max_ms;
-
 /* Lossless handoff: block until every demod has fully consumed the
  * previous chunk (seq_processed == seq_delivered) before this chunk
  * overwrites s->buf / d->input. Abort on do_exit. */
@@ -63,21 +52,8 @@ static void wait_demods_drained(void)
     for (int i = 0; i < freq_len; i++)
     {
         struct demod_state *d = &demods[i];
-        if (d->seq_processed == d->seq_delivered)
-            continue;
-        double t0 = mono_ts();
         while (!do_exit && d->seq_processed != d->seq_delivered)
             usleep(50);
-        drain_wait_total += mono_ts() - t0;
-        drain_wait_count++;
-        double ms = (mono_ts() - t0) * 1e3;
-        if (!do_exit && ms > STALL_MS)
-        {
-            log_ts();
-            fprintf(stderr,
-                    "[DEVICE] producer stalled %.1f ms waiting for demod[%d] drain\n",
-                    ms, i);
-        }
     }
 }
 
@@ -94,8 +70,6 @@ static void deliver_buf(int complex_len)
 
     if (do_exit)
         return;
-
-    chunks_delivered++;
 
     if (s->record_file)
         record_chunk(s, complex_len);
@@ -129,7 +103,6 @@ static void sdrplay_stream_cb(short *xi, short *xq,
     struct device_state *s = &device;
     static unsigned int buf_pending;
     static unsigned long dropped;
-    static double last_cb_ts;
     unsigned int n = numSamples;
 
     (void)params;
@@ -138,24 +111,6 @@ static void sdrplay_stream_cb(short *xi, short *xq,
 
     if (do_exit)
         return;
-
-    /* Diagnose API-side starvation: how long since the previous callback */
-    if (last_cb_ts > 0.0)
-    {
-        double gap = (mono_ts() - last_cb_ts) * 1e3;
-        if (gap > STALL_MS)
-        {
-            log_ts();
-            fprintf(stderr,
-                    "[STREAM] callback gap %.1f ms (n=%u, pending=%u)\n",
-                    gap, numSamples, buf_pending);
-        }
-        if (gap > api_gap_max_ms)
-            api_gap_max_ms = gap;
-    }
-    last_cb_ts = mono_ts();
-    api_cb_count++;
-    api_cb_samples += numSamples;
 
     if (dropped < STARTUP_DROP_SAMPLES)
     {
@@ -209,13 +164,11 @@ static void sdrplay_event_cb(sdrplay_api_EventT eventId,
     switch (eventId)
     {
     case sdrplay_api_GainChange:
-        log_ts();
         fprintf(stderr, "gain: %.2f dB (gRdB %u, LNA %u)\n",
                 params->gainParams.currGain, params->gainParams.gRdB,
                 params->gainParams.lnaGRdB);
         break;
     case sdrplay_api_PowerOverloadChange:
-        log_ts();
         fprintf(stderr, "ADC overload %s\n",
                 params->powerOverloadParams.powerOverloadChangeType ==
                         sdrplay_api_Overload_Detected
@@ -300,37 +253,9 @@ void *device_thread_fn(void *arg)
         return 0;
     }
 
-    /* Streaming happens on API-internal callback threads; park until
-     * exit, printing a 1 s heartbeat of delivered chunks. Steady state
-     * is ~rate/CHUNK_SAMPLES chunks per tick; lumpy deltas mean the
-     * API-internal thread is delivering in bursts. */
-    unsigned long last_heartbeat_count = 0;
-    unsigned long last_api_cbs = 0;
-    unsigned long last_api_samples = 0;
+    /* Streaming happens on API-internal callback threads; park until exit */
     while (!do_exit)
-    {
-        usleep(1000000);
-        if (do_exit)
-            break;
-        unsigned long count = chunks_delivered;
-        unsigned long waits = drain_wait_count;
-        unsigned long cbs = api_cb_count - last_api_cbs;
-        unsigned long smps = api_cb_samples - last_api_samples;
-        log_ts();
-        fprintf(stderr,
-                "[DEVICE] +%lu chunks (%.1f MS/s equivalent), drain wait %.2f ms/chunk avg | "
-                "API: %lu cbs, %.2f MS/s, avg %u smp/cb, max gap %.2f ms\n",
-                count - last_heartbeat_count,
-                (double)(count - last_heartbeat_count) * CHUNK_SAMPLES / 1e6,
-                waits ? 1000.0 * drain_wait_total / (double)waits : 0.0,
-                cbs, (double)smps / 1e6,
-                cbs ? (unsigned)(smps / cbs) : 0,
-                api_gap_max_ms);
-        last_heartbeat_count = count;
-        last_api_cbs = api_cb_count;
-        last_api_samples = api_cb_samples;
-        api_gap_max_ms = 0.0;
-    }
+        usleep(100000);
 
     (void)s;
     return 0;
