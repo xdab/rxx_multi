@@ -33,4 +33,5 @@ run*/
 plot_*.py
 
 # Performance profiling outputs
-callgrind.out
+callgrind.out*
+massif.out*
