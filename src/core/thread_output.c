@@ -6,6 +6,12 @@
 void *output_thread_fn(void *arg)
 {
     struct output_state *s = arg;
+    const int out_index = (int)(s - outputs);
+    double write_total = 0.0;
+    unsigned long write_count = 0;
+    double profile_t0 = mono_ts();
+    double write_total0 = 0.0;
+    unsigned long write_count0 = 0;
 
     while (1)
     {
@@ -50,6 +56,26 @@ void *output_thread_fn(void *arg)
 
         pthread_rwlock_unlock(&s->rw);
         s->seq_written++;
+
+        write_total += (mono_ts() - write_t0);
+        write_count++;
+
+        if (mono_ts() - profile_t0 > 5.0)
+        {
+            unsigned long n = write_count - write_count0;
+            if (n > 0)
+            {
+                log_ts();
+                fprintf(stderr,
+                        "[OUT%d] profile: %lu writes, %.3f ms/write avg (mode %d)\n",
+                        out_index, n,
+                        1000.0 * (write_total - write_total0) / (double)n,
+                        s->mode);
+            }
+            profile_t0 = mono_ts();
+            write_total0 = write_total;
+            write_count0 = write_count;
+        }
 
         double write_ms = (mono_ts() - write_t0) * 1e3;
         if (write_ms > STALL_MS)

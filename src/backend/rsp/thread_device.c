@@ -46,6 +46,9 @@ static void record_chunk(struct device_state *s, int complex_len)
 
 /* Total chunks handed to demods (heartbeat + gap accounting) */
 static volatile unsigned long chunks_delivered;
+/* Cumulative time spent blocked waiting for demods to drain (s) */
+static double drain_wait_total;
+static unsigned long drain_wait_count;
 
 /* Lossless handoff: block until every demod has fully consumed the
  * previous chunk (seq_processed == seq_delivered) before this chunk
@@ -60,6 +63,8 @@ static void wait_demods_drained(void)
         double t0 = mono_ts();
         while (!do_exit && d->seq_processed != d->seq_delivered)
             usleep(50);
+        drain_wait_total += mono_ts() - t0;
+        drain_wait_count++;
         double ms = (mono_ts() - t0) * 1e3;
         if (!do_exit && ms > STALL_MS)
         {
@@ -297,10 +302,13 @@ void *device_thread_fn(void *arg)
         if (do_exit)
             break;
         unsigned long count = chunks_delivered;
+        unsigned long waits = drain_wait_count;
         log_ts();
-        fprintf(stderr, "[DEVICE] +%lu chunks (%.1f MS/s equivalent)\n",
+        fprintf(stderr,
+                "[DEVICE] +%lu chunks (%.1f MS/s equivalent), drain wait %.2f ms/chunk avg\n",
                 count - last_heartbeat_count,
-                (double)(count - last_heartbeat_count) * CHUNK_SAMPLES / 1e6);
+                (double)(count - last_heartbeat_count) * CHUNK_SAMPLES / 1e6,
+                waits ? 1000.0 * drain_wait_total / (double)waits : 0.0);
         last_heartbeat_count = count;
     }
 

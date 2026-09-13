@@ -39,6 +39,8 @@ void *demod_thread_fn(void *arg)
     unsigned long profile_chunks0 = 0;
     double t_shift0 = 0.0, t_decim0 = 0.0, t_demod0 = 0.0;
     double t_iir0 = 0.0, t_resamp0 = 0.0;
+    double back_wait_total = 0.0;
+    unsigned long back_wait_count = 0;
 
     while (1)
     {
@@ -113,6 +115,7 @@ void *demod_thread_fn(void *arg)
                 fprintf(stderr,
                         "[DEMOD%d] profile: %lu chunks (%.2f ms/chunk total) | "
                         "shift %.3f decim %.3f demod %.3f iir %.3f resamp %.3f"
+                        " backpres %.3f"
                         " | in %d Hz M=%d demod %d Hz out %d Hz\n",
                         demod_index, done,
                         1000.0 * (now - profile_t0) / (double)done,
@@ -121,6 +124,9 @@ void *demod_thread_fn(void *arg)
                         1000.0 * (d->pipeline.t_demod - t_demod0) / (double)done,
                         1000.0 * (d->pipeline.t_iir - t_iir0) / (double)done,
                         1000.0 * (d->pipeline.t_resamp - t_resamp0) / (double)done,
+                        back_wait_count
+                            ? 1000.0 * back_wait_total / (double)back_wait_count
+                            : 0.0,
                         d->pipeline.input_rate, d->pipeline.downsample_factor,
                         d->pipeline.demod_rate, d->pipeline.output_rate);
             }
@@ -144,6 +150,8 @@ void *demod_thread_fn(void *arg)
         double back_t0 = mono_ts();
         while (!do_exit && o->seq_written != o->seq_packed)
             usleep(100);
+        back_wait_total += mono_ts() - back_t0;
+        back_wait_count++;
         double back_ms = (mono_ts() - back_t0) * 1e3;
         if (back_ms > STALL_MS)
         {
