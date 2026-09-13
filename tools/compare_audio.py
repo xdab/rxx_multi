@@ -16,7 +16,7 @@ Exit status: 0 = match (bit-exact, or within tolerance), 1 = mismatch,
 
 Usage:
   compare_audio.py REF CAND [--max-diff X] [--min-snr DB]
-      [--scan-offset N] [--raw-rate HZ]
+      [--scan-offset N] [--max-seconds S] [--raw-rate HZ]
 
   REF, CAND      WAV or headerless raw PCM16 (int16 LE mono); format
                  detected by the RIFF header, raw otherwise
@@ -109,10 +109,15 @@ def main():
                     help="search +/- N samples for best alignment")
     ap.add_argument("--raw-rate", type=int, default=48_000,
                     help="sample rate of raw files, reporting only")
+    ap.add_argument("--max-seconds", type=float, default=None,
+                    help="compare only the first N seconds of both files")
     args = ap.parse_args()
 
     a, rate_a, label_a = load(args.ref, args.raw_rate)
     b, rate_b, label_b = load(args.cand, args.raw_rate)
+    if args.max_seconds is not None:
+        a = a[:int(rate_a * args.max_seconds)]
+        b = b[:int(rate_b * args.max_seconds)]
     if rate_a != rate_b:
         print(f"WARNING: sample rates differ: {rate_a} vs {rate_b}")
 

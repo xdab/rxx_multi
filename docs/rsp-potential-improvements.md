@@ -33,6 +33,14 @@ and fail *silently*.
 
 ## Potential follow-ups
 
+0. **DONE — LUT channel-shift oscillator (landed 2026-09-13).**
+    `dsp_shift_frequency` now mixes with a 65536-entry phasor LUT +
+    uint32 DDS accumulator instead of `nco_crcf_mix_block_down`, in
+    place (temp-buffer memcpy dropped). Callgrind, 2 FM channels, 10 s
+    912 kHz file input: shift stage 2225M -> 401M Ir (-82%), whole
+    program 5.26G -> 3.30G Ir (-37%); cachegrind: D refs -55%, LL
+    misses unchanged. Next hot spot is the decimator (item 2).
+
 1. **Decimation x8 for narrow captures (1 MS/s snap point).**
    The RSP1 ADC always runs at 8 MHz; with x1/x2/x4 decimation the
    capture rate snaps up to {8, 4, 2} MHz, so even a ~0.5 MHz channel

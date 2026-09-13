@@ -181,10 +181,14 @@ static int setup_pipelines(const options_t *opts, int rate_channel, int downsamp
         pipeline->target_frequency = ch->freq;
         pipeline->frequency_offset = (double)((int64_t)ch->freq - (int64_t)device.freq);
         pipeline->frequency_shift_enabled = (pipeline->frequency_offset != 0.0);
-        pipeline->phase_inc =
-            (device.rate > 0)
-                ? 2.0f * M_PI * pipeline->frequency_offset / (double)device.rate
-                : 0.0f;
+        /* DDS phase step for the channel-shift oscillator: mixing down
+         * multiplies by e^(-j*2*pi*f_off/f_capture) per sample, so the
+         * step is the negated offset as a 2^32-turn fraction; negative
+         * offsets wrap naturally through the unsigned accumulator */
+        pipeline->shift_step = (device.rate > 0)
+                                   ? (uint32_t)(int64_t)(-pipeline->frequency_offset /
+                                                         (double)device.rate * 4294967296.0)
+                                   : 0;
 
         outputs[i].mode = ch->output_mode;
         strncpy(outputs[i].filename, ch->filename, sizeof(outputs[i].filename) - 1);

@@ -67,10 +67,13 @@ struct channel_pipeline
     firdecim_crcf channel_decimator;
     iirfilt_rrrf deemph_filter;
     iirfilt_rrrf dc_block_filter;
-    nco_crcf frequency_shifter;
+    /* Channel-shift oscillator: 32-bit DDS phase accumulator; the
+     * unsigned wraparound is the 2pi wrap. shift_step = phase increment
+     * per sample in 1/2^32 cycles, derived once from frequency_offset */
+    uint32_t shift_step;
+    uint32_t shift_acc;
     uint32_t target_frequency;
     double frequency_offset;
-    float phase_inc;
     int frequency_shift_enabled;
     float complex prev_sample;
     float complex decimator_tail[256];

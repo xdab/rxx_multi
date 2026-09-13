@@ -26,8 +26,6 @@ void pipeline_cleanup(struct channel_pipeline *pipeline)
         iirfilt_rrrf_destroy(pipeline->deemph_filter);
     if (pipeline->dc_block_filter != NULL)
         iirfilt_rrrf_destroy(pipeline->dc_block_filter);
-    if (pipeline->frequency_shifter != NULL)
-        nco_crcf_destroy(pipeline->frequency_shifter);
 }
 
 int pipeline_process(struct channel_pipeline *pipeline,

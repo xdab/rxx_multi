@@ -1,32 +1,49 @@
 #include "dsp.h"
 #include <liquid/liquid.h>
 #include <math.h>
+#include <pthread.h>
 #include <stdio.h>
 #include <string.h>
+
+/* Channel-shift oscillator: precomputed unit-phasor lookup table driven
+ * by a 32-bit DDS phase accumulator, mixing in place. Replaces liquid's
+ * per-sample nco_crcf_mix_block_down (object state + nearest-bin 1024
+ * table) with one integer add, a table index and a complex multiply,
+ * and drops the temp-buffer memcpy. No drift: table entries are exact
+ * unit phasors and the integer accumulator never loses magnitude.
+ * Worst-case phase error is half the table grid, 2*pi/2^(BITS+1), i.e.
+ * ~-86 dB spurs for 16 bits - below liquid's own 1024-entry table
+ * (-66 dB) and far below the FM noise floor. */
+#define SHIFT_LUT_BITS 16
+#define SHIFT_LUT_SIZE (1u << SHIFT_LUT_BITS)
+
+static float complex shift_lut[SHIFT_LUT_SIZE];
+static pthread_once_t shift_lut_once = PTHREAD_ONCE_INIT;
+
+static void shift_lut_build(void)
+{
+    for (unsigned int k = 0; k < SHIFT_LUT_SIZE; k++)
+        shift_lut[k] = cexpf((float)(2.0 * M_PI * (double)k / (double)SHIFT_LUT_SIZE) * I);
+}
 
 int dsp_shift_frequency(struct channel_pipeline *pipeline, struct iq_buffer *buffer)
 {
     if (pipeline == NULL || buffer == NULL || buffer->len <= 0 || !pipeline->frequency_shift_enabled)
         return 0;
 
-    if (pipeline->frequency_shifter == NULL)
-    {
-        pipeline->frequency_shifter = nco_crcf_create(LIQUID_NCO);
-        if (pipeline->frequency_shifter == NULL)
-        {
-            fprintf(stderr, "Failed to create NCO for channel shift\n");
-            buffer->len = 0;
-            return -1;
-        }
-        nco_crcf_set_frequency(pipeline->frequency_shifter, pipeline->phase_inc);
-    }
+    pthread_once(&shift_lut_once, shift_lut_build);
 
-    static _Thread_local float complex shifted[MAXIMUM_IQ_LENGTH];
-    nco_crcf_mix_block_down(pipeline->frequency_shifter,
-                            buffer->samples,
-                            shifted,
-                            (unsigned int)buffer->len);
-    memcpy(buffer->samples, shifted, sizeof(shifted[0]) * (size_t)buffer->len);
+    uint32_t acc = pipeline->shift_acc;
+    const uint32_t step = pipeline->shift_step;
+    float complex *x = buffer->samples;
+    const unsigned int n = (unsigned int)buffer->len;
+
+    for (unsigned int i = 0; i < n; i++)
+    {
+        x[i] = x[i] * shift_lut[acc >> (32 - SHIFT_LUT_BITS)];
+        acc += step;
+    }
+    pipeline->shift_acc = acc;
     return 0;
 }
 
