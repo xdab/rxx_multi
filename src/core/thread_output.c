@@ -9,6 +9,7 @@ void *output_thread_fn(void *arg)
 
     while (1)
     {
+        double wait_t0 = mono_ts();
         pthread_mutex_lock(&s->ready_m);
         while (!s->data_ready &&
                !(do_exit && s->seq_written == s->seq_packed))
@@ -22,6 +23,15 @@ void *output_thread_fn(void *arg)
         s->data_ready = 0;
         pthread_mutex_unlock(&s->ready_m);
 
+        double starved_ms = (mono_ts() - wait_t0) * 1e3;
+        if (starved_ms > STARVE_MS)
+        {
+            log_ts();
+            fprintf(stderr, "[OUT] starved %.1f ms waiting for audio\n",
+                    starved_ms);
+        }
+
+        double write_t0 = mono_ts();
         pthread_rwlock_rdlock(&s->rw);
 
         switch (s->mode)
@@ -40,6 +50,14 @@ void *output_thread_fn(void *arg)
 
         pthread_rwlock_unlock(&s->rw);
         s->seq_written++;
+
+        double write_ms = (mono_ts() - write_t0) * 1e3;
+        if (write_ms > STALL_MS)
+        {
+            log_ts();
+            fprintf(stderr, "[OUT] write slow %.1f ms (mode %d, %d samples)\n",
+                    write_ms, s->mode, s->result_len);
+        }
     }
 
     return 0;

@@ -38,8 +38,19 @@ static void wait_demods_drained(void)
     for (int i = 0; i < freq_len; i++)
     {
         struct demod_state *d = &demods[i];
+        if (d->seq_processed == d->seq_delivered)
+            continue;
+        double t0 = mono_ts();
         while (!do_exit && d->seq_processed != d->seq_delivered)
             usleep(50);
+        double ms = (mono_ts() - t0) * 1e3;
+        if (!do_exit && ms > STALL_MS)
+        {
+            log_ts();
+            fprintf(stderr,
+                    "[DEVICE] producer stalled %.1f ms waiting for demod[%d] drain\n",
+                    ms, i);
+        }
     }
 }
 
@@ -78,11 +89,25 @@ static void deliver_buf(struct device_state *s, int complex_len)
 /* RTL-SDR callback - converts raw USB samples */
 static void rtlsdr_callback(unsigned char *buf, uint32_t len, void *ctx)
 {
+    static double last_cb_ts;
     int i;
     struct device_state *s = ctx;
 
     if (do_exit)
         return;
+
+    /* Diagnose USB-side starvation: how long since the previous callback */
+    if (last_cb_ts > 0.0)
+    {
+        double gap = (mono_ts() - last_cb_ts) * 1e3;
+        if (gap > STALL_MS)
+        {
+            log_ts();
+            fprintf(stderr, "[STREAM] callback gap %.1f ms (len=%u)\n",
+                    gap, (unsigned)len);
+        }
+    }
+    last_cb_ts = mono_ts();
 
     if (!ctx)
         return;

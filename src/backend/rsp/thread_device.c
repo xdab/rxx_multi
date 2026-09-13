@@ -44,6 +44,9 @@ static void record_chunk(struct device_state *s, int complex_len)
     }
 }
 
+/* Total chunks handed to demods (heartbeat + gap accounting) */
+static volatile unsigned long chunks_delivered;
+
 /* Lossless handoff: block until every demod has fully consumed the
  * previous chunk (seq_processed == seq_delivered) before this chunk
  * overwrites s->buf / d->input. Abort on do_exit. */
@@ -52,8 +55,19 @@ static void wait_demods_drained(void)
     for (int i = 0; i < freq_len; i++)
     {
         struct demod_state *d = &demods[i];
+        if (d->seq_processed == d->seq_delivered)
+            continue;
+        double t0 = mono_ts();
         while (!do_exit && d->seq_processed != d->seq_delivered)
             usleep(50);
+        double ms = (mono_ts() - t0) * 1e3;
+        if (!do_exit && ms > STALL_MS)
+        {
+            log_ts();
+            fprintf(stderr,
+                    "[DEVICE] producer stalled %.1f ms waiting for demod[%d] drain\n",
+                    ms, i);
+        }
     }
 }
 
@@ -70,6 +84,8 @@ static void deliver_buf(int complex_len)
 
     if (do_exit)
         return;
+
+    chunks_delivered++;
 
     if (s->record_file)
         record_chunk(s, complex_len);
@@ -103,6 +119,7 @@ static void sdrplay_stream_cb(short *xi, short *xq,
     struct device_state *s = &device;
     static unsigned int buf_pending;
     static unsigned long dropped;
+    static double last_cb_ts;
     unsigned int n = numSamples;
 
     (void)params;
@@ -111,6 +128,20 @@ static void sdrplay_stream_cb(short *xi, short *xq,
 
     if (do_exit)
         return;
+
+    /* Diagnose API-side starvation: how long since the previous callback */
+    if (last_cb_ts > 0.0)
+    {
+        double gap = (mono_ts() - last_cb_ts) * 1e3;
+        if (gap > STALL_MS)
+        {
+            log_ts();
+            fprintf(stderr,
+                    "[STREAM] callback gap %.1f ms (n=%u, pending=%u)\n",
+                    gap, numSamples, buf_pending);
+        }
+    }
+    last_cb_ts = mono_ts();
 
     if (dropped < STARTUP_DROP_SAMPLES)
     {
@@ -164,11 +195,13 @@ static void sdrplay_event_cb(sdrplay_api_EventT eventId,
     switch (eventId)
     {
     case sdrplay_api_GainChange:
+        log_ts();
         fprintf(stderr, "gain: %.2f dB (gRdB %u, LNA %u)\n",
                 params->gainParams.currGain, params->gainParams.gRdB,
                 params->gainParams.lnaGRdB);
         break;
     case sdrplay_api_PowerOverloadChange:
+        log_ts();
         fprintf(stderr, "ADC overload %s\n",
                 params->powerOverloadParams.powerOverloadChangeType ==
                         sdrplay_api_Overload_Detected
@@ -253,9 +286,23 @@ void *device_thread_fn(void *arg)
         return 0;
     }
 
-    /* Streaming happens on API-internal callback threads; park until exit */
+    /* Streaming happens on API-internal callback threads; park until
+     * exit, printing a 1 s heartbeat of delivered chunks. Steady state
+     * is ~rate/CHUNK_SAMPLES chunks per tick; lumpy deltas mean the
+     * API-internal thread is delivering in bursts. */
+    unsigned long last_heartbeat_count = 0;
     while (!do_exit)
-        usleep(100000);
+    {
+        usleep(1000000);
+        if (do_exit)
+            break;
+        unsigned long count = chunks_delivered;
+        log_ts();
+        fprintf(stderr, "[DEVICE] +%lu chunks (%.1f MS/s equivalent)\n",
+                count - last_heartbeat_count,
+                (double)(count - last_heartbeat_count) * CHUNK_SAMPLES / 1e6);
+        last_heartbeat_count = count;
+    }
 
     (void)s;
     return 0;

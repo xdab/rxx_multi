@@ -37,6 +37,7 @@ void *demod_thread_fn(void *arg)
 
     while (1)
     {
+        double wait_t0 = mono_ts();
         pthread_mutex_lock(&d->ready_m);
         while (!d->data_ready &&
                !(do_exit && d->seq_processed == d->seq_delivered))
@@ -49,6 +50,14 @@ void *demod_thread_fn(void *arg)
         }
         d->data_ready = 0;
         pthread_mutex_unlock(&d->ready_m);
+
+        double starved_ms = (mono_ts() - wait_t0) * 1e3;
+        if (starved_ms > STARVE_MS)
+        {
+            log_ts();
+            fprintf(stderr, "[DEMOD] starved %.1f ms waiting for input\n",
+                    starved_ms);
+        }
 
         /* Fast-path: if output is TCP and there are no connected clients,
          * accept any pending connections then skip expensive demod processing
@@ -71,9 +80,17 @@ void *demod_thread_fn(void *arg)
             }
         }
 
+        double proc_t0 = mono_ts();
         pthread_rwlock_wrlock(&d->rw);
         int status = pipeline_process(&d->pipeline, &d->input, &d->output);
         pthread_rwlock_unlock(&d->rw);
+
+        double proc_ms = (mono_ts() - proc_t0) * 1e3;
+        if (proc_ms > STALL_MS)
+        {
+            log_ts();
+            fprintf(stderr, "[DEMOD] pipeline slow %.1f ms\n", proc_ms);
+        }
 
         /* Input fully consumed - the producer may reuse it now */
         d->seq_processed++;
@@ -86,8 +103,17 @@ void *demod_thread_fn(void *arg)
 
         /* Lossless handoff: wait until the output stage has written
          * everything packed so far before overwriting o->result */
+        double back_t0 = mono_ts();
         while (!do_exit && o->seq_written != o->seq_packed)
             usleep(100);
+        double back_ms = (mono_ts() - back_t0) * 1e3;
+        if (back_ms > STALL_MS)
+        {
+            log_ts();
+            fprintf(stderr,
+                    "[DEMOD] output backpressure %.1f ms (seq_written %lu, seq_packed %lu)\n",
+                    back_ms, o->seq_written, o->seq_packed);
+        }
 
         pthread_rwlock_wrlock(&o->rw);
         pack_output_samples(o, d->output.samples, d->output.len);
