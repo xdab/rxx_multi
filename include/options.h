@@ -50,7 +50,7 @@ typedef struct
     /* Graceful shutdown after this many seconds of running (-x); 0 = off */
     float run_timeout;
 
-    /* Channels (used even for single-channel mode) */
+    /* Channels; single-channel operation is the N=1 case */
     int channel_count;
     channel_t channels[FREQUENCIES_LIMIT];
 } options_t;

@@ -1,8 +1,8 @@
 /*
  * rtl_multi - CLI argument parsing
  *
- * Architecture: All operation uses channels (even single-channel).
- * Single-channel mode = channel_count = 1 with channels[0].
+ * Architecture: all operation is channel-based; single-channel
+ * operation is channel_count = 1 with channels[0].
  */
 
 #include <getopt.h>

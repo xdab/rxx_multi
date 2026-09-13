@@ -53,8 +53,8 @@ No test suite exists. Verification options:
 Three-stage pipeline, one pthread per stage per channel:
 
 1. **Device** — backend `thread_device.c` converts hardware samples to
-   `float complex` (~±128 convention) and calls `deliver_buf`: direct to one
-   demod in single-channel mode, fan-out to all `demods[]` in multi-channel.
+   `float complex` (~±128 convention) and calls `deliver_buf`, which fans
+   out to every `demods[]` (single-channel mode is the N=1 case).
    RTL delivers ~8192-pair USB chunks; RSP callbacks arrive in small dribbles
    (~1344 samples) and are accumulated into 8192-sample chunks first to
    preserve demod pacing. First ~300 ms after RSP `Init` are dropped (DC-cal

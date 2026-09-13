@@ -100,7 +100,6 @@ struct device_state
     int direct_sampling; /* RTL-SDR only */
     int mute;           /* RTL-SDR only */
     int biastee;        /* RTL-SDR only */
-    struct demod_state *demod_target;
     char input_path[STATIC_STRING_SIZE];  /* -I: play this file instead of hardware */
     char record_path[STATIC_STRING_SIZE]; /* -R: record capture to this file */
     FILE *record_file;                    /* open while recording; NULL = recording off */
