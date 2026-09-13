@@ -34,6 +34,11 @@ void *demod_thread_fn(void *arg)
 {
     struct demod_state *d = arg;
     struct output_state *o = d->output_target;
+    const int demod_index = (int)(d - demods);
+    double profile_t0 = mono_ts();
+    unsigned long profile_chunks0 = 0;
+    double t_shift0 = 0.0, t_decim0 = 0.0, t_demod0 = 0.0;
+    double t_iir0 = 0.0, t_resamp0 = 0.0;
 
     while (1)
     {
@@ -94,6 +99,39 @@ void *demod_thread_fn(void *arg)
 
         /* Input fully consumed - the producer may reuse it now */
         d->seq_processed++;
+
+        /* Periodic per-stage CPU profile for this channel (every 5 s):
+         * average ms per chunk spent in each pipeline stage */
+        double now = mono_ts();
+        if (now - profile_t0 > 5.0)
+        {
+            unsigned long n = d->pipeline.chunks_processed;
+            unsigned long done = n - profile_chunks0;
+            if (done > 0)
+            {
+                log_ts();
+                fprintf(stderr,
+                        "[DEMOD%d] profile: %lu chunks (%.2f ms/chunk total) | "
+                        "shift %.3f decim %.3f demod %.3f iir %.3f resamp %.3f"
+                        " | in %d Hz M=%d demod %d Hz out %d Hz\n",
+                        demod_index, done,
+                        1000.0 * (now - profile_t0) / (double)done,
+                        1000.0 * (d->pipeline.t_shift - t_shift0) / (double)done,
+                        1000.0 * (d->pipeline.t_decim - t_decim0) / (double)done,
+                        1000.0 * (d->pipeline.t_demod - t_demod0) / (double)done,
+                        1000.0 * (d->pipeline.t_iir - t_iir0) / (double)done,
+                        1000.0 * (d->pipeline.t_resamp - t_resamp0) / (double)done,
+                        d->pipeline.input_rate, d->pipeline.downsample_factor,
+                        d->pipeline.demod_rate, d->pipeline.output_rate);
+            }
+            profile_t0 = now;
+            profile_chunks0 = n;
+            t_shift0 = d->pipeline.t_shift;
+            t_decim0 = d->pipeline.t_decim;
+            t_demod0 = d->pipeline.t_demod;
+            t_iir0 = d->pipeline.t_iir;
+            t_resamp0 = d->pipeline.t_resamp;
+        }
 
         if (status != 0)
         {

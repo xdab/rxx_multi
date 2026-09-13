@@ -2,6 +2,7 @@
 
 #include "demod.h"
 #include "dsp.h"
+#include "thread.h"
 
 #include <string.h>
 
@@ -34,28 +35,52 @@ int pipeline_process(struct channel_pipeline *pipeline,
                      struct iq_buffer *input,
                      struct real_buffer *output)
 {
+    double t0;
+    int status;
+
     output->len = 0;
     if (pipeline == NULL || input == NULL || output == NULL || pipeline->demodulate == NULL)
         return -1;
 
+    t0 = mono_ts();
     if (dsp_shift_frequency(pipeline, input) != 0)
         return -1;
+    pipeline->t_shift += mono_ts() - t0;
 
+    t0 = mono_ts();
     if (dsp_decimate_channel(pipeline, input) != 0)
         return -1;
+    pipeline->t_decim += mono_ts() - t0;
 
+    t0 = mono_ts();
     pipeline->demodulate(pipeline, input, output);
+    pipeline->t_demod += mono_ts() - t0;
     if (pipeline->demodulate == &demodulate_raw)
+    {
+        pipeline->chunks_processed++;
         return 0;
+    }
 
-    if (pipeline->deemph_enabled)
-        dsp_apply_deemphasis(pipeline, output);
-
-    if (pipeline->dc_block_enabled)
-        dsp_apply_dc_block(pipeline, output);
+    if (pipeline->deemph_enabled || pipeline->dc_block_enabled)
+    {
+        t0 = mono_ts();
+        if (pipeline->deemph_enabled)
+            dsp_apply_deemphasis(pipeline, output);
+        if (pipeline->dc_block_enabled)
+            dsp_apply_dc_block(pipeline, output);
+        pipeline->t_iir += mono_ts() - t0;
+    }
 
     if (pipeline->demod_rate != pipeline->output_rate)
-        return dsp_resample_output(pipeline, output);
+    {
+        t0 = mono_ts();
+        status = dsp_resample_output(pipeline, output);
+        pipeline->t_resamp += mono_ts() - t0;
+        if (status == 0)
+            pipeline->chunks_processed++;
+        return status;
+    }
 
+    pipeline->chunks_processed++;
     return 0;
 }
