@@ -41,6 +41,38 @@ and fail *silently*.
     program 5.26G -> 3.30G Ir (-37%); cachegrind: D refs -55%, LL
     misses unchanged. Next hot spot is the decimator (item 2).
 
+   ### Decimator options (post-LUT profile, 2026-09-13)
+
+   The kaiser `firdecim` is now ~70% of CPU (`dotprod_crcf_run4` 54%
+   + `windowcf_push` 11.6% + `firdecim_crcf_execute` 4.7%). Options,
+   best value first:
+
+   a. **Two-stage decimation** (this item): cheap wide-transition
+      first stage (x2/x4 half-band - every other tap zero - or a
+      multiplier-free CIC comb) at full rate, then the existing
+      narrow kaiser at the reduced rate. The first stage's transition
+      band is huge relative to the ~1.3% final channel, so it needs
+      very few effective taps and the long filter runs on 2-4x fewer
+      samples. Realistic 2-4x cheaper decimation.
+   b. **Cheaper prototype**: `As=40, m=6` is generous for 12 kHz NBFM
+      voice; `m=4, As=35` cuts taps by a third (913 -> 609 at M=76).
+      Verify with the A/B harness on clean-signal windows.
+   c. **Kill `windowcf_push`**: liquid's firdecim copies every input
+      block into an internal circular window; we already handle
+      partial blocks via `decimator_tail`. A hand-rolled linear-buffer
+      decimator (or restructured block feeding) removes that copy.
+   d. **SIMD dot product**: `dotprod_crcf_run4` is a 4-wide SSE-era
+      kernel; a plain-C loop with `restrict` + separate accumulators
+      auto-vectorizes to AVX2/AVX-512 FMA under `-march=native`
+      (typically 2-4x on the inner kernel). Combines with (c).
+   e. **Shared coarse decimation before the fan-out**: in multi-channel
+      mode, if the channel plan fits in a reduced band, one coarse
+      decimation for all channels amortizes stage-1 cost across N
+      channels instead of per channel.
+   f. **RSP only - item 1**: API-side x8 decimation (1 MS/s snap
+      point) halves the input rate before it reaches us; rate-model
+      surgery, not DSP-internal.
+
 1. **Decimation x8 for narrow captures (1 MS/s snap point).**
    The RSP1 ADC always runs at 8 MHz; with x1/x2/x4 decimation the
    capture rate snaps up to {8, 4, 2} MHz, so even a ~0.5 MHz channel
