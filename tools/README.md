@@ -72,6 +72,32 @@ Example:
 tools/iq_waterfall.py baseband.cf32 912k 172.956M 20 waterfall.png
 ```
 
+## audio_hiss_metric.py
+
+Objective junk metric for demodulator A/B: ratio of audio energy in the
+3.5–7 kHz band vs 0–3.5 kHz, over the first N seconds, per file. The
+above-band shelf is discriminator noise; comb structure is periodic
+seam clicks. Prints a table and saves a bar+PSD plot.
+
+```
+audio_hiss_metric.py OUT.png REF.wav CAND.wav [CAND.wav ...]
+                    [--seconds S] [--split HZ] [--lp HZ]
+```
+
+- `REF.wav` reference recording (gray, first bar), candidates follow
+- `--seconds S` analyze only the first S seconds (default 7 — point it
+  at a section with a clean signal)
+- `--split HZ` band split (default 3500)
+- `--lp HZ` apply a 129-tap lowpass at HZ to candidates only
+  (default 8000 — matches what the channel bandwidth should pass;
+  skipped for signals whose Nyquist is below it; `--lp 0` disables)
+
+Example:
+
+```bash
+python3 tools/audio_hiss_metric.py junk.png raw.wav mine.wav --seconds 7
+```
+
 ## raw2wav.py
 
 Convert raw PCM output (S16_LE int16 — demodulated audio of both
