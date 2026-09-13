@@ -6,6 +6,14 @@ LIBS_COMMON := -lpthread -lm -lliquid
 # Backends: rtl (librtlsdr) and rsp (SDRplay API v3)
 BACKENDS ?= rtl rsp
 
+# Profiling build (make profile): production codegen + debug symbols for
+# valgrind/callgrind, in a separate obj dir and *.prof binaries
+ifeq ($(PROFILE),1)
+CFLAGS += -g -fno-omit-frame-pointer
+OBJ_DIR := obj/prof
+TARGET_SUFFIX := .prof
+endif
+
 # Directories
 CORE_DIR := src/core
 OBJ_DIR := obj
@@ -19,8 +27,8 @@ rtl_LIBS := -lrtlsdr
 rsp_LIBS := -lsdrplay_api
 
 # Binary names carry the backend name; APP_NAME drives the help text
-rtl_TARGET := $(BIN_DIR)/rtl_multi
-rsp_TARGET := $(BIN_DIR)/rsp_multi
+rtl_TARGET := $(BIN_DIR)/rtl_multi$(TARGET_SUFFIX)
+rsp_TARGET := $(BIN_DIR)/rsp_multi$(TARGET_SUFFIX)
 
 .PHONY: all
 all: $(BACKENDS)
@@ -47,7 +55,7 @@ $(OBJ_DIR)/$(1)/backend/%.o: src/backend/$(1)/%.c | $(OBJ_DIR)
 	@mkdir -p $$(@D)
 	$$(CC) $$(CFLAGS) -DAPP_NAME='"$(2)"' -MMD -MP -c $$< -o $$@
 
-$(BIN_DIR)/$(2): $$($(1)_OBJ) | $(BIN_DIR)
+$(BIN_DIR)/$(2)$(TARGET_SUFFIX): $$($(1)_OBJ) | $(BIN_DIR)
 	$$(CC) $$(CFLAGS) -o $$@ $$^ $(LIBS_COMMON) $$($(1)_LIBS)
 	@echo "✓ Build successful: $$@"
 endef
@@ -58,6 +66,14 @@ $(eval $(call BACKEND_RULES,rsp,rsp_multi))
 .PHONY: rtl rsp
 rtl: $(rtl_TARGET)
 rsp: $(rsp_TARGET)
+
+# Profiling builds (valgrind/callgrind); do not touch obj/ or bin/ builds
+.PHONY: profile profile-rtl profile-rsp
+profile: profile-rtl profile-rsp
+profile-rtl:
+	$(MAKE) PROFILE=1 rtl
+profile-rsp:
+	$(MAKE) PROFILE=1 rsp
 
 -include $(shell find $(OBJ_DIR) -name '*.d' 2>/dev/null)
 
@@ -86,6 +102,7 @@ help:
 	@echo "  all         - Build all backends (default: BACKENDS=rtl rsp)"
 	@echo "  rtl         - Build bin/rtl_multi (librtlsdr)"
 	@echo "  rsp         - Build bin/rsp_multi (SDRplay API v3)"
+	@echo "  profile     - Build bin/*.prof with debug symbols (valgrind/callgrind)"
 	@echo "  clean       - Remove build artifacts (obj/, bin/)"
 	@echo "  install     - Install both binaries to /usr/local/bin"
 	@echo ""
