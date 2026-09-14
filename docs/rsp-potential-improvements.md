@@ -125,11 +125,14 @@ and fail *silently*.
    quantization floor). Acceptable for FM voice in a pinch; not a
    default.
 
-4. **Pre-create pipeline filters.**
-   Demod filter objects (kaiser decimator, resampler) are created lazily
-   on the first processed chunk — an ~80 ms one-time spike per channel,
-   visible as a stall right when a TCP client connects. Creating them at
-   channel setup removes the spike. Small, easy win.
+4. **Pre-create pipeline filters.** — DONE 2026-09-14
+   `dsp_init_filters` (dsp.c) builds kaiser decimator, resampler,
+   de-emphasis and DC-blocker at channel setup (creator helpers shared
+   with the lazy paths, which remain as safety net). Outputs bit-exact
+   vs the lazy build. File-mode first-output latency unchanged
+   (172 -> 183 ms: the init was hidden inside startup anyway and is now
+   serialized in setup); the win is on the live path, where the spike
+   no longer lands on the first chunks / client connect.
 
 5. **Daemon health monitoring.**
    The failure mode above is invisible to our code: the API drops

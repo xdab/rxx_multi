@@ -35,6 +35,7 @@
 
 #include "demod.h"
 #include "device.h"
+#include "dsp.h"
 #include "options.h"
 #include "output.h"
 #include "thread.h"
@@ -232,6 +233,13 @@ static int setup_pipelines(const options_t *opts, int rate_channel, int downsamp
         for (int i = 0; i < opts->channel_count; i++)
             demods[i].pipeline.deemph_alpha = deemph_a;
     }
+
+    /* Build the per-channel DSP filter objects now, not lazily on the
+     * first chunk: avoids a one-time stall per channel right when
+     * processing starts (e.g. when a TCP client connects) */
+    for (int i = 0; i < opts->channel_count; i++)
+        if (dsp_init_filters(&demods[i].pipeline) < 0)
+            return -1;
 
     return 0;
 }

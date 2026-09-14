@@ -85,6 +85,37 @@ static inline float complex decim_dot(const float *restrict h,
     return ar0 + ai0 * I;
 }
 
+/* Kaiser prototype + decimator state for one channel; shared by the
+ * setup-time pre-creation (dsp_init_filters) and the lazy path. */
+static int decimator_create(struct channel_pipeline *pipeline)
+{
+    unsigned int M = (unsigned int)pipeline->downsample_factor;
+    float As = 35.0f;
+    unsigned int m = 4; /* prototype filter delay */
+    unsigned int h_len = 2 * m * M + 1;
+
+    if (M > sizeof(pipeline->decimator_tail) / sizeof(pipeline->decimator_tail[0]) / (2 * m))
+    {
+        fprintf(stderr, "Unsupported downsample factor: %u\n", M);
+        return -1;
+    }
+
+    pipeline->decim_taps = malloc(h_len * sizeof(float));
+    if (pipeline->decim_taps == NULL)
+    {
+        fprintf(stderr, "Failed to allocate %u decimator taps\n", h_len);
+        return -1;
+    }
+    liquid_firdes_kaiser(h_len, 1.0f / (float)M, As, 0.0f,
+                         pipeline->decim_taps);
+    pipeline->decim_taps_len = h_len;
+    /* History starts zeroed (window warm-up): pipeline_init's memset
+     * already zeroed decimator_tail, so just mark it full. */
+    pipeline->decimator_tail_len = h_len - 1;
+    pipeline->decim_rem = 0;
+    return 0;
+}
+
 int dsp_decimate_channel(struct channel_pipeline *pipeline, struct iq_buffer *buffer)
 {
     /*
@@ -104,35 +135,12 @@ int dsp_decimate_channel(struct channel_pipeline *pipeline, struct iq_buffer *bu
         return 0;
 
     unsigned int M = (unsigned int)pipeline->downsample_factor;
-    float As = 35.0f;
-    unsigned int m = 4; /* prototype filter delay */
     static _Thread_local float complex temp_out[MAXIMUM_IQ_LENGTH];
 
-    if (M > sizeof(pipeline->decimator_tail) / sizeof(pipeline->decimator_tail[0]) / (2 * m))
+    if (pipeline->decim_taps == NULL && decimator_create(pipeline) < 0)
     {
-        fprintf(stderr, "Unsupported downsample factor: %u\n", M);
         buffer->len = 0;
         return -1;
-    }
-
-    if (pipeline->decim_taps == NULL)
-    {
-        unsigned int h_len = 2 * m * M + 1;
-
-        pipeline->decim_taps = malloc(h_len * sizeof(float));
-        if (pipeline->decim_taps == NULL)
-        {
-            fprintf(stderr, "Failed to allocate %u decimator taps\n", h_len);
-            buffer->len = 0;
-            return -1;
-        }
-        liquid_firdes_kaiser(h_len, 1.0f / (float)M, As, 0.0f,
-                             pipeline->decim_taps);
-        pipeline->decim_taps_len = h_len;
-        /* History starts zeroed (window warm-up): pipeline_init's memset
-         * already zeroed decimator_tail, so just mark it full. */
-        pipeline->decimator_tail_len = h_len - 1;
-        pipeline->decim_rem = 0;
     }
 
     unsigned int h_len = pipeline->decim_taps_len;
@@ -186,6 +194,18 @@ int dsp_decimate_channel(struct channel_pipeline *pipeline, struct iq_buffer *bu
     return 0;
 }
 
+static int resampler_create(struct channel_pipeline *pipeline)
+{
+    float r = (float)pipeline->output_rate / (float)pipeline->demod_rate;
+    unsigned int m = 10;
+    float bw = 0.45f;
+    float As = 40.0f;
+    unsigned int npfb = 32;
+
+    pipeline->audio_resampler = resamp_rrrf_create(r, m, bw, As, npfb);
+    return (pipeline->audio_resampler == NULL) ? -1 : 0;
+}
+
 int dsp_resample_output(struct channel_pipeline *pipeline, struct real_buffer *buffer)
 {
     float r;
@@ -207,14 +227,7 @@ int dsp_resample_output(struct channel_pipeline *pipeline, struct real_buffer *b
     if (max_out > MAXIMUM_BUF_LENGTH)
         max_out = MAXIMUM_BUF_LENGTH;
 
-    unsigned int m = 10;
-    float bw = 0.45f;
-    float As = 40.0f;
-    unsigned int npfb = 32;
-    if (pipeline->audio_resampler == NULL)
-        pipeline->audio_resampler = resamp_rrrf_create(r, m, bw, As, npfb);
-
-    if (pipeline->audio_resampler == NULL)
+    if (pipeline->audio_resampler == NULL && resampler_create(pipeline) < 0)
         return -1;
 
     unsigned int out_len = 0;
@@ -235,39 +248,42 @@ int dsp_resample_output(struct channel_pipeline *pipeline, struct real_buffer *b
     return 0;
 }
 
+static int deemph_create(struct channel_pipeline *pipeline)
+{
+    float tau = 75e-6f;
+    float Fs = (pipeline->demod_rate > 0) ? (float)pipeline->demod_rate : (float)pipeline->output_rate;
+    float d;
+    float b0;
+
+    if (pipeline->deemph_alpha > 0.0f)
+    {
+        b0 = pipeline->deemph_alpha;
+        d = 1.0f - b0;
+    }
+    else
+    {
+        d = expf(-1.0f / (tau * Fs));
+        b0 = 1.0f - d;
+    }
+
+    float b[2] = {b0, 0.0f};
+    float a[2] = {1.0f, -d};
+    pipeline->deemph_filter = iirfilt_rrrf_create(b, 2, a, 2);
+    if (pipeline->deemph_filter == NULL)
+    {
+        fprintf(stderr, "Failed to create de-emphasis filter\n");
+        return -1;
+    }
+    return 0;
+}
+
 void dsp_apply_deemphasis(struct channel_pipeline *pipeline, struct real_buffer *buffer)
 {
     if (pipeline == NULL || buffer == NULL || !pipeline->deemph_enabled || buffer->len <= 0)
         return;
 
-    /* Create a standard single-pole de-emphasis filter if needed */
-    if (pipeline->deemph_filter == NULL)
-    {
-        float tau = 75e-6f;
-        float Fs = (pipeline->demod_rate > 0) ? (float)pipeline->demod_rate : (float)pipeline->output_rate;
-        float d;
-        float b0;
-
-        if (pipeline->deemph_alpha > 0.0f)
-        {
-            b0 = pipeline->deemph_alpha;
-            d = 1.0f - b0;
-        }
-        else
-        {
-            d = expf(-1.0f / (tau * Fs));
-            b0 = 1.0f - d;
-        }
-
-        float b[2] = {b0, 0.0f};
-        float a[2] = {1.0f, -d};
-        pipeline->deemph_filter = iirfilt_rrrf_create(b, 2, a, 2);
-        if (pipeline->deemph_filter == NULL)
-        {
-            fprintf(stderr, "Failed to create de-emphasis filter\n");
-            return;
-        }
-    }
+    if (pipeline->deemph_filter == NULL && deemph_create(pipeline) < 0)
+        return;
 
     unsigned int n = (unsigned int)buffer->len;
     if (n > MAXIMUM_BUF_LENGTH)
@@ -278,21 +294,25 @@ void dsp_apply_deemphasis(struct channel_pipeline *pipeline, struct real_buffer 
         buffer->samples[i] = tmp_out[i];
 }
 
+static int dcblock_create(struct channel_pipeline *pipeline)
+{
+    float alpha = 0.02f;
+    pipeline->dc_block_filter = iirfilt_rrrf_create_dc_blocker(alpha);
+    if (pipeline->dc_block_filter == NULL)
+    {
+        fprintf(stderr, "Failed to create DC-block filter\n");
+        return -1;
+    }
+    return 0;
+}
+
 void dsp_apply_dc_block(struct channel_pipeline *pipeline, struct real_buffer *buffer)
 {
     if (pipeline == NULL || buffer == NULL || !pipeline->dc_block_enabled || buffer->len <= 0)
         return;
 
-    if (pipeline->dc_block_filter == NULL)
-    {
-        float alpha = 0.02f;
-        pipeline->dc_block_filter = iirfilt_rrrf_create_dc_blocker(alpha);
-        if (pipeline->dc_block_filter == NULL)
-        {
-            fprintf(stderr, "Failed to create DC-block filter\n");
-            return;
-        }
-    }
+    if (pipeline->dc_block_filter == NULL && dcblock_create(pipeline) < 0)
+        return;
 
     unsigned int n = (unsigned int)buffer->len;
     if (n > MAXIMUM_BUF_LENGTH)
@@ -307,4 +327,28 @@ float dsp_polar_discriminant(float complex current, float complex previous)
 {
     float complex delta = current * conjf(previous);
     return atan2f(cimagf(delta), crealf(delta)) / M_PI * (float)(1 << 14);
+}
+
+/* Pre-create a channel's filter objects at setup time so the first
+ * processed chunk does not pay the lazy-init spike (~80 ms per channel,
+ * visible as a stall right when a TCP client connects). Call after the
+ * pipeline's rates, decimation factor and mode flags are set; the lazy
+ * paths in the dsp_* functions remain as a safety net. */
+int dsp_init_filters(struct channel_pipeline *pipeline)
+{
+    if (pipeline == NULL)
+        return -1;
+    if (pipeline->downsample_factor > 1 && pipeline->decim_taps == NULL &&
+        decimator_create(pipeline) < 0)
+        return -1;
+    if (pipeline->demod_rate != pipeline->output_rate &&
+        pipeline->audio_resampler == NULL && resampler_create(pipeline) < 0)
+        return -1;
+    if (pipeline->deemph_enabled && pipeline->deemph_filter == NULL &&
+        deemph_create(pipeline) < 0)
+        return -1;
+    if (pipeline->dc_block_enabled && pipeline->dc_block_filter == NULL &&
+        dcblock_create(pipeline) < 0)
+        return -1;
+    return 0;
 }

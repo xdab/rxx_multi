@@ -3,6 +3,7 @@
 
 #include "types.h"
 
+int dsp_init_filters(struct channel_pipeline *pipeline);
 int dsp_shift_frequency(struct channel_pipeline *pipeline, struct iq_buffer *buffer);
 int dsp_decimate_channel(struct channel_pipeline *pipeline, struct iq_buffer *buffer);
 int dsp_resample_output(struct channel_pipeline *pipeline, struct real_buffer *buffer);
