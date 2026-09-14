@@ -67,7 +67,9 @@ Inclusive view: demod threads 81.8%, device/file thread 8.7%,
    the cascade costs 1.27× MORE MACs at equal per-stage shape and
    collapses far-zone alias rejection by ~60 dB. Rejected.]**;
    **(b)** a full-width AVX kernel on deinterleaved scratch
-   (~3–4× on the remainder) — now the primary lever.
+   (~3–4× on the remainder) — now the primary lever
+   **[validated 2026-09-14: 3.8× measured, `tools/simd_decim_bench.c`;
+   see `docs/improvement-options.md` Option 2]**.
 2. **NCO LUT thrashes L1.** `dsp_shift_frequency` causes 22.5 M D1
    read misses (76% of the program's total); a quarter of its Ir is
    plausibly L1-miss latency. A 4K-entry LUT (32 KB, fits L1) with

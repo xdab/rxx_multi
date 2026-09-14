@@ -12,7 +12,7 @@ Runtime shares below are steady-state (startup excluded).
 | Opt | Lever | Est. gain (runtime) | Risk |
 |-----|-------|--------------------:|------|
 | 1 | Multi-stage decimation | **REJECTED by sim** — see below | — |
-| 2 | AVX decimator kernel | ~3–4× on item 1 (64%) | low |
+| 2 | AVX decimator kernel | **VALIDATED by sim: 3.8×** (~35% total) | low |
 | 3 | Small interpolated NCO LUT | most of item 2 (19.7%) | low |
 | 4 | Fan-out copy trimming | ≤ item 3 (8.9%) | **high** |
 | — | FM demod, audio resampler, file I/O | <1% each | rejected |
@@ -75,39 +75,55 @@ Original sketch (superseded, kept for the record):
   per-stage kaiser in `decimator_create` (dsp.c:90), chained runs of
   the existing in-place stage code, prime-M fallback to single stage.
 
-## Option 2 — vectorized decimator kernel (SIMD on deinterleaved data) — now the top lever
+## Option 2 — vectorized decimator kernel — VALIDATED (3.8×), ready to implement
 
-With Option 1 rejected, this is the primary attack on the 64% hotspot.
+Validated 2026-09-14 with `tools/simd_decim_bench.c` (Ryzen 3700X /
+Zen 2, AVX2+FMA, exact production hot-path shape: 65 × 1001-tap
+complex dots per 8192-sample chunk, chained inputs so nothing is
+hoistable):
 
-- **Problem.** `decim_dot` (dsp.c:56-86) is scalar by choice but its
-  complex-interleaved access `xf[2*k]` defeats gcc auto-vectorization
-  even with the 4-accumulator pattern; 47.6% of total Ir sits in this
-  loop plus ~10% loop overhead.
-- **Idea.** (a) Deinterleave each chunk once (Re/Im float arrays in a
-  `_Thread_local` scratch pair, one pass over the 8192 samples) so the
-  dot products become two unit-stride real×real loops gcc can
-  auto-vectorize with FMA; or (b) an explicit AVX2/FMA kernel.
-- **Sketch.**
-  - Variant (a): in `dsp_decimate_channel`, after the (optional)
-    stage loop entry, build `float re[N], im[N]` scratch; rewrite
-    `decim_dot` as two plain loops `ar += h[k]*re[k+off]`,
-    `ai += h[k]*im[k+off]` — check with `gcc -fopt-info-vec` that
-    they actually vectorize; keep the scalar tail loop.
-  - Variant (b): hand kernel `_mm256_fmadd_ps` over 8 taps/iter, h
-    broadcast per lane group; guard with `__builtin_cpu_supports` or
-    just `-march=native` (already the build flag — a compile-time
-    target is acceptable per Makefile).
-  - The deinterleave pass itself is ~2 stores/sample — amortized over
-    `h_len` MACs per output it is noise; at M=125 only ~65 outputs
-    reuse each deinterleave, at small M (post-Option-1 stages) it is
-    reused by proportionally more outputs, still fine.
-- **Verification.** numerical: compare `dsp_decimate_channel` outputs
-  old vs new on the same `-I` input to within float rounding
-  tolerance (not bit-exact: different summation order); then the
-  profile delta.
-- **Watch out.** ordering of FMA accumulations changes results
-  slightly — same class of difference as liquid's run4 grouping,
-  harmless, but don't chase bit-exactness.
+| variant | speedup | notes |
+|---------|--------:|-------|
+| S — production `decim_dot` (scalar, 4-acc) | 1.00× | 4.1 G cMAC/s, 15.8 µs/chunk |
+| A — deinterleave + gcc auto-vec | **0.20×** | gcc *does* vectorize it (`-fopt-info-vec`: 32 B vectors) but the codegen is 5× slower than scalar — auto-vectorization is a dead end for this pattern |
+| B — AVX2/FMA on interleaved data, pair-broadcast taps | 2.9× | no deinterleave pass; load-port bound (2 loads/FMA) |
+| C — AVX2/FMA on deinterleaved data | 2.2× | deinterleave cost + plain vector FMAs |
+| **D — B + tap reuse across two output windows** | **3.8–3.9×** | halves tap loads; 15.8→4.1 µs/chunk |
+
+All variants numerically exact vs S within float reordering
+(max abs 6.1e-5 on |y| ≈ 112 ≈ 5e-7 relative). Production impact
+estimate: `decim_dot` is 47.6% of total Ir (+10% loop overhead) → 3.85×
+on the kernel ≈ **35% total runtime reduction** (compute-bound, so
+wall-clock follows Ir).
+
+- **Problem.** `decim_dot` (dsp.c:56-86) is scalar; the strided
+  `xf[2*k]` complex access blocks useful auto-vectorization (and the
+  attempted auto-vec variant A actively regresses 5×).
+- **Idea (variant D).** Explicit AVX2/FMA kernel over the interleaved
+  complex window with taps pre-broadcast to lane pairs
+  `(h0,h0,h1,h1,h2,h2,h3,h3)`; process output windows in PAIRS so each
+  tap vector load feeds two FMAs (3 loads per 2 dots instead of 4) —
+  that is what buys the extra 30% over B on a load-port-limited core.
+- **Implementation pointers.**
+  - `decimator_create` (dsp.c:90): build `__m256 h_pairs[h_len/4]`
+    alongside `decim_taps` (8 KB at M=125; free in
+    `pipeline_cleanup`).
+  - `dsp_decimate_channel` (dsp.c:174): bulk loop steps outputs two
+    at a time (window starts `e − tail_len + n*M` and `+(n+1)*M`);
+    odd final output via the single-window kernel (variant B form);
+    the ≤8 boundary outputs straddling `decimator_tail` keep the
+    split-dot scalar form — 12% of dots, negligible either way.
+  - Guard with `#if defined(__AVX2__) && defined(__FMA__)`, keep the
+    scalar loop as the fallback path (Makefile's `-march=native`
+    means the guard is on for all local builds; it keeps the source
+    buildable elsewhere).
+  - Everything stays float; results differ from the scalar build only
+    by summation order — same class of change as the earlier switch
+    to the 4-accumulator scalar form.
+  - End-to-end gates: `-I`/`-R` round trip still sane, E2E listen
+    (`tools/e2e_capture.py`), and the profile harness
+    (`docs/profiling-results.md`) — expect the
+    `dsp_decimate_channel` Ir share to drop from ~58% to ~30%.
 
 ## Option 3 — NCO LUT: 4K entries + interpolation
 
