@@ -11,57 +11,73 @@ Runtime shares below are steady-state (startup excluded).
 
 | Opt | Lever | Est. gain (runtime) | Risk |
 |-----|-------|--------------------:|------|
-| 1 | Multi-stage decimation | up to ~8× on item 1 (64%) | medium |
-| 2 | AVX decimator kernel | ~3–4× on item 1 remainder | low |
+| 1 | Multi-stage decimation | **REJECTED by sim** — see below | — |
+| 2 | AVX decimator kernel | ~3–4× on item 1 (64%) | low |
 | 3 | Small interpolated NCO LUT | most of item 2 (19.7%) | low |
 | 4 | Fan-out copy trimming | ≤ item 3 (8.9%) | **high** |
 | — | FM demod, audio resampler, file I/O | <1% each | rejected |
 
-## Option 1 — factorized multi-stage decimation
+## Option 1 — factorized multi-stage decimation (investigated, rejected)
+
+**Status: killed by simulation on 2026-09-14** (standalone harness,
+ported `decim_dot`/tail/rem semantics from dsp.c; M=125 = ÷5·5·5).
+Measured against the production single stage (m=4, As=35):
+
+| config (taps/stage) | cMAC/input | vs base | far-zone alias leak (base: −59.5 dB) |
+|---------------------|-----------:|--------:|--------------------------------------|
+| 125 (production) | 8.01 | 1.00 | −59.5 dB |
+| 5·5·5, m=4,4,4 (41/41/41) | 10.17 | 1.27× | **+0.2 dB** (Δ +59.6) |
+| 5·5·5, m=2,3,4 (21/31/41) | 5.77 | 0.72× | −0.2 dB (Δ +59.3) |
+| 5·5·5, m=3,3,3 (31 each) | 7.69 | 0.96× | −0.1 dB (Δ +59.3) |
+| 25·5, m=4,4 (201/41) | 8.37 | 1.05× | +0.1 dB (Δ +59.6) |
+| 5·25, m=4,4 (41/201) | 9.81 | 1.23× | −6.0 dB (Δ +53.5) |
+
+- **The "8× fewer MACs" claim was wrong.** It counted every stage's dot
+  products at the final output rate (3·41 vs 1001 taps per output),
+  forgetting that stage 1 must produce 1638 outputs per 8192-sample
+  chunk, not 65. At equal per-stage shape the cascade costs
+  2m·(1 + 1/5 + 1/25) ≈ 1.27× the single stage's 2m.
+- **Every naive cascade destroys far-zone alias rejection** (+53 to
+  +60 dB): a per-stage kaiser with fc = 1/M_stage only protects that
+  stage's own near band, not the alias zones of downstream stages —
+  some far-out tone rides a transition region straight into the
+  passband. A "proper" multistage design (multiband early stages with
+  stopbands at their alias frequencies) needs ≥ ~63-tap stage 1 →
+  ≈ 15.6 cMAC/input ≈ 2× baseline — arithmetic cross-validated by the
+  25·5 and 5·5·5 measured points. There is no win anywhere.
+- **The single stage is already at the polyphase cost floor** for its
+  selectivity class: h/M = 8.01 ≈ 2m + 1/M per input sample. No
+  re-factorization can beat it at equal selectivity. If more
+  selectivity is ever wanted, the lever is a proper cutoff (fc toward
+  1/(2M), more taps), not staging.
+
+Side-findings from the same harness:
+
+- **liquid kaiser taps are not gain-normalized** (`liquid_firdes_kaiser`
+  Σh ≈ M/2; liquid's own `firdecim_crcf_create_kaiser` ≈ M). The
+  production decimator therefore has ~62× passband gain at M=125 —
+  invisible to FM (`dsp_polar_discriminant` is phase-only) but fully
+  visible to AM/USB/LSB (demod.c multiplies only `output_scale` = 1.0)
+  and raw. Inherited behavior (the old liquid path had it too), not a
+  regression — but worth a dedicated fix/normalization pass.
+- The tail/rem/e-index bookkeeping ports cleanly to cascades
+  (chunk-independence ~3e-7 rel err, brute-force semantics match ~1e-6)
+  — proven mechanics if multi-stage is ever needed for other reasons.
+
+Original sketch (superseded, kept for the record):
 
 - **Problem.** `dsp_decimate_channel` (src/core/dsp.c:119) is 64% of
   runtime. One ÷M stage means every output sample costs a full
-  `2·m·M+1`-tap dot product (1001 taps at M=125). Tap count grows
-  linear in M but cost per input sample grows linear in M too — the
-  single stage is the worst case.
-- **Idea.** Factor M into stages (125 = 5·5·5 or 25·5); run the
-  cascade on the shifted chunk. Per-stage tap count is
-  `2·m·M_stage+1` (41 taps per ÷5 stage), so total MACs per input
-  sample drop from ~1001/125 ≈ 8.0 to ~3·41/5 ≈ 24.6/5·… — in short
-  ~8× fewer for 5·5·5. Early stages also shrink the data the later
-  stages touch.
-- **Sketch.**
-  - Generalize `channel_pipeline` (include/types.h:71-88): replace
-    the single `decim_taps`/`decimator_tail`/`decim_rem` with a small
-    fixed array of stage states (`DECIM_STAGES_MAX` ~4; tail sizing
-    per stage is tiny — biggest stage has the smallest M_stage… check
-    which stage order needs the `decimator_tail[2048]` budget).
-  - `decimator_create` (dsp.c:90) becomes a loop designing one kaiser
-    prototype per stage (`fc = 1/M_stage`, same As=35, m=4; first
-    stage may want a tighter As since later stages add their own
-    stopbands — pick per-stage As so the cascade meets ~35 dB end to
-    end).
-  - `dsp_decimate_channel` becomes: for each stage, dot-product
-    decimate in place through the existing `temp_out` scratch
-    (alternate two buffers), staging through `buffer->samples` as
-    today; `decim_rem` carry becomes per-stage.
-  - Factorization choice: prefer factors of M found by trial
-    division, largest-first or balanced — a ÷2 stage at the *end* is
-    nearly free but at the *start* halves nothing; put small factors
-    last (operate on already-reduced rate). M=125 → 5,5,5 is
-    balanced; M=11 (wbfm at 2M snap) is prime → single stage
-    fallback, which the current code already is.
-  - Keep `dsp_init_filters` (dsp.c:337) pre-creating all stages.
-- **Verification.** `-I` file mode, compare demodulated audio
-  numerically against the single-stage build (max/running difference
-  of PCM16 output; expect small but nonzero — different filter), and
-  by ear via `tools/e2e_capture.py`. Confirm anchor counts in the
-  profile change as predicted (Ir in decimate drops ~8×).
-- **Watch out.** Group delay = sum of stage delays; only matters if
-  anything ever assumes the current delay (nothing in core does —
-  demod is memoryless FM).
+  `2·m·M+1`-tap dot product (1001 taps at M=125).
+- **Idea (refuted).** Factor M into stages; per-stage tap count is
+  `2·m·M_stage+1`.
+- **Sketch.** Stage array in `channel_pipeline` (include/types.h:71-88),
+  per-stage kaiser in `decimator_create` (dsp.c:90), chained runs of
+  the existing in-place stage code, prime-M fallback to single stage.
 
-## Option 2 — vectorized decimator kernel (SIMD on deinterleaved data)
+## Option 2 — vectorized decimator kernel (SIMD on deinterleaved data) — now the top lever
+
+With Option 1 rejected, this is the primary attack on the 64% hotspot.
 
 - **Problem.** `decim_dot` (dsp.c:56-86) is scalar by choice but its
   complex-interleaved access `xf[2*k]` defeats gcc auto-vectorization
@@ -70,8 +86,7 @@ Runtime shares below are steady-state (startup excluded).
 - **Idea.** (a) Deinterleave each chunk once (Re/Im float arrays in a
   `_Thread_local` scratch pair, one pass over the 8192 samples) so the
   dot products become two unit-stride real×real loops gcc can
-  auto-vectorize with FMA; or (b) an explicit AVX2/FMA kernel. Either
-  composes with Option 1 (applies to every stage's dot).
+  auto-vectorize with FMA; or (b) an explicit AVX2/FMA kernel.
 - **Sketch.**
   - Variant (a): in `dsp_decimate_channel`, after the (optional)
     stage loop entry, build `float re[N], im[N]` scratch; rewrite
@@ -146,8 +161,8 @@ Runtime shares below are steady-state (startup excluded).
   drain path in `main.c` must free slots, not just broadcast. Budget
   it as a redesign task with its own plan, not a patch.
 - **Why it's last.** 8.9% for the largest blast radius of all four
-  options, and the profile is compute-bound overall — Options 1+3
-  alone target ~84% of runtime.
+  options, and the profile is compute-bound overall — Option 2 + 3
+  target ~84% of runtime without touching it.
 
 ## Considered and rejected (matching the profile's own verdict)
 

@@ -62,8 +62,12 @@ Inclusive view: demod threads 81.8%, device/file thread 8.7%,
    **(a)** factorized multi-stage decimation — per-stage tap counts
    scale with the stage's own factor, e.g. 5·5·5 ≈ 8× fewer MACs than
    one ÷125 stage (see the former roadmap doc for the full design and
-   validation gates); **(b)** a full-width AVX kernel on
-   deinterleaved scratch (~3–4× on the remainder).
+   validation gates) — **[correction 2026-09-14: this 8× estimate was
+   wrong; simulation in `docs/improvement-options.md` Option 1 shows
+   the cascade costs 1.27× MORE MACs at equal per-stage shape and
+   collapses far-zone alias rejection by ~60 dB. Rejected.]**;
+   **(b)** a full-width AVX kernel on deinterleaved scratch
+   (~3–4× on the remainder) — now the primary lever.
 2. **NCO LUT thrashes L1.** `dsp_shift_frequency` causes 22.5 M D1
    read misses (76% of the program's total); a quarter of its Ir is
    plausibly L1-miss latency. A 4K-entry LUT (32 KB, fits L1) with
