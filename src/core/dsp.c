@@ -3,6 +3,7 @@
 #include <math.h>
 #include <pthread.h>
 #include <stdio.h>
+#include <stdlib.h>
 #include <string.h>
 
 /* Channel-shift oscillator: precomputed unit-phasor lookup table driven
@@ -47,6 +48,43 @@ int dsp_shift_frequency(struct channel_pipeline *pipeline, struct iq_buffer *buf
     return 0;
 }
 
+/* FIR decimator inner kernel: complex input x real taps, plain C with
+ * restrict and 4 interleaved accumulators (limits float rounding depth
+ * to liquid's run4 grouping; also the classic auto-vectorization
+ * pattern) so -O3 -march=native emits AVX FMA (liquid's dotprod_crcf_run4
+ * is a 4-wide SSE-era kernel without FMA). */
+static inline float complex decim_dot(const float *restrict h,
+                                      const float complex *restrict x,
+                                      unsigned int n_taps)
+{
+    const float *restrict xf = (const float *)x;
+    float ar0 = 0.0f, ai0 = 0.0f;
+    float ar1 = 0.0f, ai1 = 0.0f;
+    float ar2 = 0.0f, ai2 = 0.0f;
+    float ar3 = 0.0f, ai3 = 0.0f;
+
+    unsigned int k = 0;
+    for (; k + 4 <= n_taps; k += 4)
+    {
+        ar0 += h[k] * xf[2 * k];
+        ai0 += h[k] * xf[2 * k + 1];
+        ar1 += h[k + 1] * xf[2 * k + 2];
+        ai1 += h[k + 1] * xf[2 * k + 3];
+        ar2 += h[k + 2] * xf[2 * k + 4];
+        ai2 += h[k + 2] * xf[2 * k + 5];
+        ar3 += h[k + 3] * xf[2 * k + 6];
+        ai3 += h[k + 3] * xf[2 * k + 7];
+    }
+    for (; k < n_taps; k++)
+    {
+        ar0 += h[k] * xf[2 * k];
+        ai0 += h[k] * xf[2 * k + 1];
+    }
+    ar0 = (ar0 + ar1) + (ar2 + ar3);
+    ai0 = (ai0 + ai1) + (ai2 + ai3);
+    return ar0 + ai0 * I;
+}
+
 int dsp_decimate_channel(struct channel_pipeline *pipeline, struct iq_buffer *buffer)
 {
     /*
@@ -54,8 +92,10 @@ int dsp_decimate_channel(struct channel_pipeline *pipeline, struct iq_buffer *bu
      * - Purpose: remove spectral content above the new Nyquist (fs_out/2)
      *   before downsampling so high-frequency energy does not alias into
      *   the passband.
-     * - Behavior: for integer decimation factors we use Liquid-DSP's
-     *   `firdecim_crcf` block API to process M-sample blocks efficiently.
+     * - Behavior: streaming FIR with the same kaiser prototype that
+     *   liquid's firdecim_crcf_create_kaiser(M, m, As) designs, but on a
+     *   linear buffer: no circular-window rewrite per block, one dot
+     *   product per output sample, history kept in decimator_tail.
      */
     if (pipeline == NULL || buffer == NULL || buffer->len <= 0)
         return 0;
@@ -68,78 +108,78 @@ int dsp_decimate_channel(struct channel_pipeline *pipeline, struct iq_buffer *bu
     unsigned int m = 4; /* prototype filter delay */
     static _Thread_local float complex temp_out[MAXIMUM_IQ_LENGTH];
 
-    if (M > sizeof(pipeline->decimator_tail) / sizeof(pipeline->decimator_tail[0]))
+    if (M > sizeof(pipeline->decimator_tail) / sizeof(pipeline->decimator_tail[0]) / (2 * m))
     {
         fprintf(stderr, "Unsupported downsample factor: %u\n", M);
         buffer->len = 0;
         return -1;
     }
 
-    if (pipeline->channel_decimator == NULL)
+    if (pipeline->decim_taps == NULL)
     {
-        pipeline->channel_decimator = firdecim_crcf_create_kaiser(M, m, As);
-        if (pipeline->channel_decimator == NULL)
+        unsigned int h_len = 2 * m * M + 1;
+
+        pipeline->decim_taps = malloc(h_len * sizeof(float));
+        if (pipeline->decim_taps == NULL)
         {
-            fprintf(stderr, "Failed to create firdecim_crcf for M=%u\n", M);
+            fprintf(stderr, "Failed to allocate %u decimator taps\n", h_len);
             buffer->len = 0;
             return -1;
         }
+        liquid_firdes_kaiser(h_len, 1.0f / (float)M, As, 0.0f,
+                             pipeline->decim_taps);
+        pipeline->decim_taps_len = h_len;
+        /* History starts zeroed (window warm-up): pipeline_init's memset
+         * already zeroed decimator_tail, so just mark it full. */
+        pipeline->decimator_tail_len = h_len - 1;
+        pipeline->decim_rem = 0;
     }
 
+    unsigned int h_len = pipeline->decim_taps_len;
+
+    unsigned int tail_len = pipeline->decimator_tail_len;
+    unsigned int r = pipeline->decim_rem;
     unsigned int in_len = (unsigned int)buffer->len;
-    if (in_len == 0)
+    unsigned int out_len = (in_len + r) / M;
+    /* In-chunk offset just past the first output's window end; bumped
+     * to M when the stream sits exactly on an output boundary (that
+     * output belongs to the previous chunk). */
+    unsigned int e = ((M - r) % M == 0 ? M : (M - r) % M) - 1;
+
+    /* Output n is a causal FIR anchored at its newest input sample:
+     * window [e + n*M - h_len + 1, e + n*M] in chunk coords. In virtual
+     * coords (tail ++ samples) the window starts at e + n*M, because
+     * tail_len = h_len-1. Boundary outputs reach into the tail, the
+     * bulk sits inside the chunk. */
+    unsigned int n = 0;
+    while (n < out_len && e < tail_len)
     {
-        buffer->len = 0;
-        return 0;
+        unsigned int split = tail_len - e;
+
+        temp_out[n] = decim_dot(pipeline->decim_taps,
+                                pipeline->decimator_tail + e, split) +
+                      decim_dot(pipeline->decim_taps + split,
+                                buffer->samples, h_len - split);
+        n++;
+        e += M;
     }
+    for (; n < out_len; n++, e += M)
+        temp_out[n] = decim_dot(pipeline->decim_taps,
+                                buffer->samples + e - tail_len, h_len);
 
-    unsigned int out_len = 0;
-    unsigned int consumed = 0;
-
-    if (pipeline->decimator_tail_len > 0)
+    /* Slide the history forward by the whole chunk (unconsumed
+     * remainder included), then carry the stream position mod M. */
+    if (in_len >= tail_len)
+        memcpy(pipeline->decimator_tail, buffer->samples + in_len - tail_len,
+               tail_len * sizeof(pipeline->decimator_tail[0]));
+    else
     {
-        unsigned int needed = M - pipeline->decimator_tail_len;
-
-        if (in_len < needed)
-        {
-            memcpy(pipeline->decimator_tail + pipeline->decimator_tail_len,
-                   buffer->samples,
-                   sizeof(buffer->samples[0]) * (size_t)in_len);
-            pipeline->decimator_tail_len += in_len;
-            buffer->len = 0;
-            return 0;
-        }
-
-        memcpy(pipeline->decimator_tail + pipeline->decimator_tail_len,
-               buffer->samples,
-               sizeof(buffer->samples[0]) * (size_t)needed);
-
-        firdecim_crcf_execute(pipeline->channel_decimator,
-                              pipeline->decimator_tail,
-                              &temp_out[out_len]);
-        out_len++;
-        pipeline->decimator_tail_len = 0;
-        consumed = needed;
+        memmove(pipeline->decimator_tail, pipeline->decimator_tail + in_len,
+                (tail_len - in_len) * sizeof(pipeline->decimator_tail[0]));
+        memcpy(pipeline->decimator_tail + tail_len - in_len, buffer->samples,
+               in_len * sizeof(pipeline->decimator_tail[0]));
     }
-
-    unsigned int remaining = in_len - consumed;
-    unsigned int full_blocks = remaining / M;
-    if (full_blocks > 0)
-    {
-        firdecim_crcf_execute_block(pipeline->channel_decimator,
-                                    buffer->samples + consumed,
-                                    full_blocks,
-                                    temp_out + out_len);
-        out_len += full_blocks;
-        consumed += full_blocks * M;
-    }
-
-    remaining = in_len - consumed;
-    if (remaining > 0)
-        memcpy(pipeline->decimator_tail,
-               buffer->samples + consumed,
-               sizeof(buffer->samples[0]) * (size_t)remaining);
-    pipeline->decimator_tail_len = remaining;
+    pipeline->decim_rem = (r + in_len) % M;
 
     memcpy(buffer->samples, temp_out, sizeof(temp_out[0]) * (size_t)out_len);
     buffer->len = (int)out_len;

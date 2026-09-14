@@ -64,7 +64,12 @@ struct channel_pipeline
     float deemph_alpha;
     int dc_block_enabled;
     resamp_rrrf audio_resampler;
-    firdecim_crcf channel_decimator;
+    /* Hand-rolled linear-buffer FIR decimator: decimator_tail always
+     * holds decim_taps_len-1 history samples (zero-filled at creation,
+     * slid forward by in_len after every chunk). Sized for M <= 256
+     * with the m=4 prototype (2*4*256). */
+    float *decim_taps;           /* kaiser prototype, decim_taps_len taps */
+    unsigned int decim_taps_len; /* filter length 2*m*M + 1 */
     iirfilt_rrrf deemph_filter;
     iirfilt_rrrf dc_block_filter;
     /* Channel-shift oscillator: 32-bit DDS phase accumulator; the
@@ -76,8 +81,11 @@ struct channel_pipeline
     double frequency_offset;
     int frequency_shift_enabled;
     float complex prev_sample;
-    float complex decimator_tail[256];
+    float complex decimator_tail[2048];
     unsigned int decimator_tail_len;
+    /* Decimator carry: unconsumed input samples mod M (stream position
+     * mod M), so outputs land at global multiples of M. Always < M. */
+    unsigned int decim_rem;
     demodulate_fn demodulate;
 };
 
