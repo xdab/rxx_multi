@@ -5,6 +5,21 @@ Measured 2026-09-14 with the fixed 2-channel harness below. Replaces
 performance state reported here is post-LUT-shift, post-hand-rolled
 decimator, post-pre-created-filters.
 
+## Update 2026-09-14: AVX decimator landed
+
+Option 2 from `improvement-options.md` is implemented (paired-window
+AVX2/FMA kernels in `dsp.c`, scalar fallback). Re-measured with
+cachegrind on a 1 s slice (8 MB — shares are slice-stable, comparable
+to the 5 s baseline below):
+
+- Program total: **403.4M → 288.4M Ir per second of RF (−28.5%)**
+- `dsp_decimate_channel`: 57.9% → **8.3%** (kernels inlined into it)
+- New top consumer: `dsp_shift_frequency` at 12.5% — measured natively
+  at ~1.0 ns/sample and not worth optimizing (see Option 3 rejection)
+- Fan-out memcpy next at 5.6% (structural; fenced territory)
+
+The profile below remains as the pre-AVX baseline record.
+
 ## What was profiled
 
 - Binary `bin/rsp_multi.prof` (`make profile-rsp`: production codegen

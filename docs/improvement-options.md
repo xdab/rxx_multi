@@ -12,14 +12,16 @@ Runtime shares below are steady-state (startup excluded).
 | Opt | Lever | Est. gain (runtime) | Risk |
 |-----|-------|--------------------:|------|
 | 1 | Multi-stage decimation | **REJECTED by sim** — see below | — |
-| 2 | AVX decimator kernel | **VALIDATED by sim: 3.8×** (~35% total) | low |
+| 2 | AVX decimator kernel | **IMPLEMENTED: −28.5% total Ir** | low |
 | 3 | Small interpolated NCO LUT | **REJECTED by sim** — see below | — |
 | 4 | Fan-out copy trimming | ≤ item 3 (8.9%) | **high** |
 | — | FM demod, audio resampler, file I/O | <1% each | rejected |
 
-With 1 and 3 rejected, Option 2 is the only validated lever worth
-implementing; after it lands, the decimator stops being the hotspot
-and the profile should be re-run before touching anything else.
+With 1 and 3 rejected and 2 implemented, nothing in this list should
+be touched without a fresh profile: after Option 2 the decimator is no
+longer the hotspot (`dsp_shift_frequency` 12.5% is, and it is measured
+not worth optimizing; the fan-out memcpy is next at 5.6% but is the
+fenced chunk-handoff territory).
 
 ## Option 1 — factorized multi-stage decimation (investigated, rejected)
 
@@ -80,6 +82,22 @@ Original sketch (superseded, kept for the record):
   the existing in-place stage code, prime-M fallback to single stage.
 
 ## Option 2 — vectorized decimator kernel — VALIDATED (3.8×), ready to implement
+
+**Status: IMPLEMENTED 2026-09-14** — variant D landed in
+`src/core/dsp.c` (`decim_dot_avx2` / `decim_dot2_avx2`, pairs built in
+`decimator_create`, freed in `pipeline_cleanup`, scalar fallback
+preserved; guarded by `#if defined(__AVX2__) && defined(__FMA__)`).
+Landed gates:
+
+- A/B vs baseline binary, 5 s file slice, 2 ch FM: max PCM16 diff
+  **1 LSB** on 0.03–0.06% of 240k samples/channel (summation order
+  only); wbfm M=11 path bit-identical; `-R`+`-I` rejection unchanged
+  (pre-existing option guard).
+- Profile, 1 s slice (cachegrind): program total 403.4M → **288.4M
+  Ir/s of RF (−28.5%)**; `dsp_decimate_channel` **57.9% → 8.3%**;
+  `dsp_shift_frequency` now tops the table at 12.5% (measured
+  ~1 ns/sample natively — leave it, see Option 3).
+- Wall-clock: user CPU 0.170 → 0.134 s per 5 s slice (−21%).
 
 Validated 2026-09-14 with `tools/simd_decim_bench.c` (Ryzen 3700X /
 Zen 2, AVX2+FMA, exact production hot-path shape: 65 × 1001-tap

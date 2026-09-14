@@ -70,6 +70,11 @@ struct channel_pipeline
      * with the m=4 prototype (2*4*256). */
     float *decim_taps;           /* kaiser prototype, decim_taps_len taps */
     unsigned int decim_taps_len; /* filter length 2*m*M + 1 */
+    /* AVX2 decimation kernels only: the same taps broadcast to lane
+     * pairs, 8 floats per 4 taps (h0,h0,h1,h1,h2,h2,h3,h3). NULL on
+     * non-AVX2 builds or if its setup allocation fails, in which case
+     * the scalar dot runs instead. */
+    float *decim_taps_pairs;
     iirfilt_rrrf deemph_filter;
     iirfilt_rrrf dc_block_filter;
     /* Channel-shift oscillator: 32-bit DDS phase accumulator; the

@@ -21,6 +21,7 @@ void pipeline_cleanup(struct channel_pipeline *pipeline)
     if (pipeline->audio_resampler != NULL)
         resamp_rrrf_destroy(pipeline->audio_resampler);
     free(pipeline->decim_taps);
+    free(pipeline->decim_taps_pairs);
     if (pipeline->deemph_filter != NULL)
         iirfilt_rrrf_destroy(pipeline->deemph_filter);
     if (pipeline->dc_block_filter != NULL)
