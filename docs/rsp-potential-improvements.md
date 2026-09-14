@@ -47,24 +47,48 @@ and fail *silently*.
    + `windowcf_push` 11.6% + `firdecim_crcf_execute` 4.7%). Options,
    best value first:
 
+   **Update 2026-09-14: b, c, d are landed** (m=4/As=35 prototype +
+   hand-rolled linear decimator in `dsp.c`). Fresh profile, same
+   harness at capture scale (2 FM channels, 28 s 2 MS/s file input):
+   program 18.76G -> 10.40G Ir (-45%), native user CPU 3.07 -> 0.92 s
+   (-70%). New ranking: kernel 6.55G (63%, scalar FMA chains),
+   shift LUT 2.02G (19%), memcpy 0.91G (9%); liquid's window
+   machinery is deleted. Two-stage (a) is now the biggest lever and
+   shrinks kernel and shift together.
+
    a. **Two-stage decimation** (this item): cheap wide-transition
       first stage (x2/x4 half-band - every other tap zero - or a
       multiplier-free CIC comb) at full rate, then the existing
       narrow kaiser at the reduced rate. The first stage's transition
       band is huge relative to the ~1.3% final channel, so it needs
       very few effective taps and the long filter runs on 2-4x fewer
-      samples. Realistic 2-4x cheaper decimation.
-   b. **Cheaper prototype**: `As=40, m=6` is generous for 12 kHz NBFM
-      voice; `m=4, As=35` cuts taps by a third (913 -> 609 at M=76).
-      Verify with the A/B harness on clean-signal windows.
-   c. **Kill `windowcf_push`**: liquid's firdecim copies every input
-      block into an internal circular window; we already handle
-      partial blocks via `decimator_tail`. A hand-rolled linear-buffer
-      decimator (or restructured block feeding) removes that copy.
-   d. **SIMD dot product**: `dotprod_crcf_run4` is a 4-wide SSE-era
-      kernel; a plain-C loop with `restrict` + separate accumulators
-      auto-vectorizes to AVX2/AVX-512 FMA under `-march=native`
-      (typically 2-4x on the inner kernel). Combines with (c).
+      samples. Realistic 2-4x cheaper decimation. The tail/remainder
+      state machine from the hand-rolled decimator generalizes to a
+      per-stage version.
+   b. **Cheaper prototype** — DONE 2026-09-14: `m=4, As=35`, taps
+      1501 -> 1001 at M=125 (2 MS/s / 16 kHz plan). Callgrind: program
+      18.76G -> 14.55G Ir (-22%), kernel -33%. A/B on the run/ capture:
+      outputs match after the expected m*M group-delay shift (6 audio
+      samples), SNR 37-39 dB with outliers only in startup warm-up;
+      hiss shelf unchanged. Note the group-delay shift: any prototype
+      change moves the output by (m_old - m_new) * M input samples.
+   c. **Kill `windowcf_push`** — DONE 2026-09-14: hand-rolled
+      linear-buffer decimator (`dsp_decimate_channel`); tail always
+      holds h_len-1 history, `decim_rem` carries the stream position
+      mod M so outputs stay at global multiples of M. Taps and window
+      anchoring verified bit-exact against `firdecim_crcf_create_kaiser`
+      by impulse test; output length exact. Watch the output-grid
+      arithmetic: a per-chunk `floor(in/M)` without the remainder
+      carry silently drops `M - (in mod M)` samples per chunk
+      (0.8% audio compression at M=125, 8192-sample chunks).
+   d. **SIMD dot product** — half done 2026-09-14: plain C with
+      `restrict` + 4 interleaved accumulators (liquid run4 rounding
+      depth) yields scalar `vfmadd231ss` chains under
+      `-march=native` — already 3x wall-clock over liquid's no-FMA
+      SSE. gcc declines to vectorize the interleaved-complex
+      reduction; full 8-wide AVX needs manual deinterleave into
+      re/im scratch. Not attempted (kernel is no longer the only
+      hot spot; two-stage shrinks it more for less code).
    e. **Shared coarse decimation before the fan-out**: in multi-channel
       mode, if the channel plan fits in a reduced band, one coarse
       decimation for all channels amortizes stage-1 cost across N
