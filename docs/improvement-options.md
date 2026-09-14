@@ -13,9 +13,13 @@ Runtime shares below are steady-state (startup excluded).
 |-----|-------|--------------------:|------|
 | 1 | Multi-stage decimation | **REJECTED by sim** — see below | — |
 | 2 | AVX decimator kernel | **VALIDATED by sim: 3.8×** (~35% total) | low |
-| 3 | Small interpolated NCO LUT | most of item 2 (19.7%) | low |
+| 3 | Small interpolated NCO LUT | **REJECTED by sim** — see below | — |
 | 4 | Fan-out copy trimming | ≤ item 3 (8.9%) | **high** |
 | — | FM demod, audio resampler, file I/O | <1% each | rejected |
+
+With 1 and 3 rejected, Option 2 is the only validated lever worth
+implementing; after it lands, the decimator stops being the hotspot
+and the profile should be re-run before touching anything else.
 
 ## Option 1 — factorized multi-stage decimation (investigated, rejected)
 
@@ -125,40 +129,47 @@ wall-clock follows Ir).
     (`docs/profiling-results.md`) — expect the
     `dsp_decimate_channel` Ir share to drop from ~58% to ~30%.
 
-## Option 3 — NCO LUT: 4K entries + interpolation
+## Option 3 — NCO LUT: 4K entries + interpolation (investigated, rejected)
 
-- **Problem.** `dsp_shift_frequency` (dsp.c:30-49) is 19.7% of
-  runtime and 76% of all D1 read misses: the 64K-entry
-  (`SHIFT_LUT_BITS 16`, 512 KB) phasor table in `shift_lut[]`
-  (dsp.c:18-21) cannot live in 32 KB L1; each access risks eviction
-  and a quarter of the function's Ir is plausibly miss latency.
-- **Idea.** Shrink to `SHIFT_LUT_BITS 12` (4K entries, 32 KB — fits
-  L1) and linearly interpolate between the two neighboring phasors
-  using the next 12 phase bits as the fraction: `p = lut[hi] +
-  frac·(lut[hi+1] − lut[hi])`. Interpolated magnitude dips slightly
-  (≤ ~0.06% for 4K grid) — comparable to the tolerance already
-  argued in the dsp.c:9-17 comment block; update that comment's
-  spur math. Alternative without interpolation: 16K-entry table
-  (128 KB) still misses L1; interpolation is the point.
-- **Sketch.**
-  - Keep the 32-bit accumulator and `shift_step` unchanged; per
-    sample compute `idx = acc >> 20`, `frac = (acc >> 8) & 0xFFF`
-    scaled to [0,1) — exact mask widths from the two bit-budgets
-    (32 − BITS used for index, next 12 for fraction).
-  - Wrap: `idx+1` masked with `(SIZE-1)` (phasor periodicity).
-  - Cost per sample rises (~2 mul + adds) but all L1-resident; the
-    win is the removed miss latency. If profiling shows the
-    interpolated version is not clearly ahead, a second step is
-    computing `cos/sin` pairs in SoA layout (separate cos[]/sin[]
-    float arrays) to help the compiler keep both in registers.
-- **Verification.** spectrum check: feed a strong single tone via
-  `-I`, FFT the shifted output (e.g. dump after decimate with `-M raw`
-  to a file), confirm no visible spur ridges above ~-80 dBc; plus the
-  standard profile delta (expect D1mr to collapse, Ir in the function
-  to drop by up to ~¾ of its miss share).
-- **Watch out.** all channels share the one table; per-channel phase
-  sequences stride it at unrelated offsets — interpolation must use
-  each channel's own accumulator, no shared index tricks.
+**Status: killed by simulation on 2026-09-14** (`tools/nco_lut_bench.c`:
+production shift loop vs 12-bit interpolated AoS/SoA, 12-bit direct,
+and a table-free phasor recurrence; Ryzen 3700X / Zen 2). The premise
+was that the 512 KB table's D1 misses cost time. They do not.
+
+| variant | accuracy (dBc) | ns/sample | D1mr/sample | Ir vs V0 |
+|---------|---------------:|----------:|------------:|---------:|
+| V0 — 16-bit direct (production) | −85.1 | **1.03** | 1.13 | 1.00 |
+| V1 — 12-bit interp, AoS | −130.3 | 2.37 | 0.32 | 2.00 |
+| V2 — 12-bit interp, SoA | −130.3 | 1.33 | 0.43 | 0.78 |
+| V3 — 12-bit direct | −61.1 | 0.92 | 0.33 | 1.00 |
+| V4 — phasor recurrence, K=1024 | −101.8 | 2.32 | 0.13 | 1.11 |
+
+(accuracy = total error vs double-precision ideal over 1M samples, so
+it bounds every spur line; speed insensitive to a 160 KB inter-chunk
+cache-thrash, i.e. the loop is not memory-latency-bound.)
+
+- **Every accuracy-preserving variant is slower than production.**
+  Interpolation works exactly as theorized (−130 dBc, theory −131) but
+  costs 29% (SoA) to 130% (AoS) more wall-clock. The recurrence is
+  serial-dependency-bound (~2 FMA latencies/sample). Only the direct
+  12-bit lookup is faster — by 11% — and it drops spurs to −61 dBc,
+  worse than liquid's shipped 1024-entry table (−66 dBc), for ~2% of
+  total runtime. Bad trade.
+- **Why the profile's attribution was wrong:** on Zen 2 the 512 KB
+  table is L2-resident (private 512 KB L2); the ~14-cycle L2 latency
+  behind the D1 misses is fully hidden by out-of-order execution
+  across independent iterations, while the extra FP ops of the
+  alternatives sit on the critical path. Cachegrind counts misses but
+  does not price them — D1mr is a count, not a cost. The same caveat
+  applies to the "76% of all D1 read misses" headline in
+  `profiling-results.md`.
+- **True native cost of `dsp_shift_frequency`: ~1.0 ns/sample**, i.e.
+  2 channels × 2 MS/s ≈ 0.4% of one core — versus its 19.7% *Ir*
+  share (valgrind's serialized instruction-count view). Leave it
+  alone.
+- The bench also validates the accumulator bookkeeping across chunk
+  boundaries (nonzero start phase, ±225 kHz / 1 kHz offsets) — useful
+  if the NCO is ever touched for other reasons.
 
 ## Option 4 — trim the fan-out memcpy (flagged, high-risk)
 

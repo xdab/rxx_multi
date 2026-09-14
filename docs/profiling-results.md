@@ -74,6 +74,13 @@ Inclusive view: demod threads 81.8%, device/file thread 8.7%,
    read misses (76% of the program's total); a quarter of its Ir is
    plausibly L1-miss latency. A 4K-entry LUT (32 KB, fits L1) with
    interpolation would recover most of the 17.9%.
+   **[correction 2026-09-14: the latency attribution was wrong —
+   measured natively on Zen 2 the shift loop runs ~1.0 ns/sample and
+   is insensitive to cache pressure; the 512 KB table is L2-resident
+   and OOO hides the L2 latency. Every interpolated/recurrence
+   variant is slower than the shipped direct lookup. D1mr is a
+   count, not a cost. Option 3 rejected — see
+   `docs/improvement-options.md` and `tools/nco_lut_bench.c`.]**
 3. **Fan-out memcpy (8%)** is structural to the one-device-many-
    channels model; refcounted zero-copy buffers would trim it but
    touches the chunk handoff that AGENTS.md says not to casually fix.
