@@ -1,142 +1,153 @@
 # RSP backend: potential improvements
 
-Findings from debugging periodic audio dropouts (0.9 s of audio, then
-0.7 s of silence, repeating) that affected only `rsp_multi`, never
-`rtl_multi`, when streaming demodulated audio over TCP. This document
-records the root cause, the fix that shipped, and the improvement ideas
-that were left on the table, with the reasoning behind each. It is
-self-contained: no knowledge of the original debugging session required.
+Findings and roadmap from debugging periodic audio dropouts (0.9 s of
+audio, then 0.7 s of silence, repeating) that affected only `rsp_multi`,
+never `rtl_multi`, when streaming demodulated audio over TCP. This
+document is self-contained: no knowledge of the original session
+required.
 
-## Root cause (as measured, 2026-09)
+## Background
 
 - The RSP path never delivers samples itself: the SDRplay API daemon
   (`sdrplay_apiService`) decimates the 8 MHz ADC stream on the host CPU
-  and hands small packets (~336 samples, i.e. 168 us of signal) to the
-  client over IPC — roughly 6000 callbacks/s at a 2 MS/s capture rate.
-- Instrumentation (temporary, since removed) showed our pipeline fully
-  able to keep up (demod + output + TCP well inside the 4.1 ms/chunk
-  budget), while the daemon was pinned at 100% of one core and delivered
-  only ~1.15 MS/s instead of 2.0. The missing 43% was dropped inside the
-  API's ring — silent, unrecoverable, and exactly the audible duty cycle.
-- RTL-SDR is immune by architecture: librtlsdr moves USB data straight
-  into our process. No daemon, no host-side decimation, no IPC pump.
-- The trigger was our own config: API decimation was set with
-  `wideBandSignal = 1`, a mode documented for signals wider than 1.6 MHz.
-  **Fix shipped:** `wideBandSignal = 0` (rsp/device.c) — the correct
-  narrowband decimation path, which is also far cheaper in the daemon.
-  With it, the daemon sustains the full 5952 callbacks/s and the
-  dropouts disappear.
+  and hands small packets (~336 samples) to the client over IPC —
+  roughly 6000 callbacks/s at a 2 MS/s capture rate.
+- Instrumentation showed our pipeline fully able to keep up while the
+  daemon was pinned at 100% of one core and delivered only ~1.15 of
+  2.00 MS/s; the missing 43% was dropped silently inside the API ring —
+  exactly the audible duty cycle. RTL-SDR is immune by architecture: no
+  daemon, no host-side decimation, no IPC pump.
+- Trigger: API decimation was set with `wideBandSignal = 1`, a mode
+  documented for signals wider than 1.6 MHz. Fix shipped 2026-09:
+  `wideBandSignal = 0` (rsp/device.c) — the correct narrowband path,
+  also far cheaper in the daemon. Dropouts gone.
 
 Lesson: on the RSP path the daemon is part of the real-time budget.
 Treat daemon CPU like capture bandwidth — a resource that can run out
 and fail *silently*.
 
-## Potential follow-ups
+Performance work is tracked with a fixed harness: callgrind
+`--cache-sim=yes`, 2 FM channels (`-s 16k -r 48k`), 28 s of 2 MS/s
+file input (`run/429MHz_2Msps.cf32`); wall-clock from the same command.
+Harness baseline at the start of the 2026-09-14 session: 18.76G Ir,
+3.07 s user CPU.
 
-0. **DONE — LUT channel-shift oscillator (landed 2026-09-13).**
-    `dsp_shift_frequency` now mixes with a 65536-entry phasor LUT +
-    uint32 DDS accumulator instead of `nco_crcf_mix_block_down`, in
-    place (temp-buffer memcpy dropped). Callgrind, 2 FM channels, 10 s
-    912 kHz file input: shift stage 2225M -> 401M Ir (-82%), whole
-    program 5.26G -> 3.30G Ir (-37%); cachegrind: D refs -55%, LL
-    misses unchanged. Next hot spot is the decimator (item 2).
+## DONE
 
-   ### Decimator options (post-LUT profile, 2026-09-13)
+- **Narrowband API decimation** (2026-09): `wideBandSignal = 0` — the
+  root-cause fix above; daemon sustains the full callback rate.
+- **LUT channel-shift oscillator** (2026-09-13): `dsp_shift_frequency`
+  mixes via a 65536-entry phasor LUT + uint32 DDS accumulator in place
+  of `nco_crcf_mix_block_down`. Shift stage 2225M -> 401M Ir (-82%).
+- **Cheaper decimator prototype** (2026-09-14): kaiser m=6/As=40 ->
+  m=4/As=35, taps 1501 -> 1001 at M=125. Program 18.76G -> 14.55G Ir
+  (-22%); A/B shows the expected m*M group-delay shift, SNR 37-39 dB.
+- **Hand-rolled linear-buffer decimator** (2026-09-14): liquid
+  `firdecim`/`windowcf` replaced by a linear-buffer FIR (tail =
+  h_len-1, `decim_rem` carries the output grid mod M; taps verified
+  bit-exact by impulse test). Window machinery (~21% of program)
+  deleted; kernel is scalar-FMA chains. Program 14.55G -> 10.40G Ir
+  (-45% cumulative), native user CPU 3.07 -> 0.92 s (-70%).
+- **Pre-created channel filters** (2026-09-14): `dsp_init_filters`
+  builds decimator/resampler/de-emphasis/DC-blocker at setup; lazy
+  paths remain as safety net. Outputs bit-exact; removes the
+  first-chunk init stall (live path: right at client connect).
 
-   The kaiser `firdecim` is now ~70% of CPU (`dotprod_crcf_run4` 54%
-   + `windowcf_push` 11.6% + `firdecim_crcf_execute` 4.7%). Options,
-   best value first:
+Current profile split (10.40G total): decimation kernel 6.55G (63%),
+shift LUT 2.02G (19%), memcpy 0.91G (9%), rest < 5% each. LL miss rate
+0.1% — compute-bound; memory-side work has nothing to give.
 
-   **Update 2026-09-14: b, c, d are landed** (m=4/As=35 prototype +
-   hand-rolled linear decimator in `dsp.c`). Fresh profile, same
-   harness at capture scale (2 FM channels, 28 s 2 MS/s file input):
-   program 18.76G -> 10.40G Ir (-45%), native user CPU 3.07 -> 0.92 s
-   (-70%). New ranking: kernel 6.55G (63%, scalar FMA chains),
-   shift LUT 2.02G (19%), memcpy 0.91G (9%); liquid's window
-   machinery is deleted. Two-stage (a) is now the biggest lever and
-   shrinks kernel and shift together.
+## PLANNED
 
-   a. **Two-stage decimation** (this item): cheap wide-transition
-      first stage (x2/x4 half-band - every other tap zero - or a
-      multiplier-free CIC comb) at full rate, then the existing
-      narrow kaiser at the reduced rate. The first stage's transition
-      band is huge relative to the ~1.3% final channel, so it needs
-      very few effective taps and the long filter runs on 2-4x fewer
-      samples. Realistic 2-4x cheaper decimation. The tail/remainder
-      state machine from the hand-rolled decimator generalizes to a
-      per-stage version.
-   b. **Cheaper prototype** — DONE 2026-09-14: `m=4, As=35`, taps
-      1501 -> 1001 at M=125 (2 MS/s / 16 kHz plan). Callgrind: program
-      18.76G -> 14.55G Ir (-22%), kernel -33%. A/B on the run/ capture:
-      outputs match after the expected m*M group-delay shift (6 audio
-      samples), SNR 37-39 dB with outliers only in startup warm-up;
-      hiss shelf unchanged. Note the group-delay shift: any prototype
-      change moves the output by (m_old - m_new) * M input samples.
-   c. **Kill `windowcf_push`** — DONE 2026-09-14: hand-rolled
-      linear-buffer decimator (`dsp_decimate_channel`); tail always
-      holds h_len-1 history, `decim_rem` carries the stream position
-      mod M so outputs stay at global multiples of M. Taps and window
-      anchoring verified bit-exact against `firdecim_crcf_create_kaiser`
-      by impulse test; output length exact. Watch the output-grid
-      arithmetic: a per-chunk `floor(in/M)` without the remainder
-      carry silently drops `M - (in mod M)` samples per chunk
-      (0.8% audio compression at M=125, 8192-sample chunks).
-   d. **SIMD dot product** — half done 2026-09-14: plain C with
-      `restrict` + 4 interleaved accumulators (liquid run4 rounding
-      depth) yields scalar `vfmadd231ss` chains under
-      `-march=native` — already 3x wall-clock over liquid's no-FMA
-      SSE. gcc declines to vectorize the interleaved-complex
-      reduction; full 8-wide AVX needs manual deinterleave into
-      re/im scratch. Not attempted (kernel is no longer the only
-      hot spot; two-stage shrinks it more for less code).
-   e. **Shared coarse decimation before the fan-out**: in multi-channel
-      mode, if the channel plan fits in a reduced band, one coarse
-      decimation for all channels amortizes stage-1 cost across N
-      channels instead of per channel.
-   f. **RSP only - item 1**: API-side x8 decimation (1 MS/s snap
-      point) halves the input rate before it reaches us; rate-model
-      surgery, not DSP-internal.
+### Factorized multi-stage decimator
 
-1. **Decimation x8 for narrow captures (1 MS/s snap point).**
-   The RSP1 ADC always runs at 8 MHz; with x1/x2/x4 decimation the
-   capture rate snaps up to {8, 4, 2} MHz, so even a ~0.5 MHz channel
-   plan pays a 2 MS/s capture and the tight 4.1 ms demod budget that
-   comes with it. The API accepts larger factors; x8 would put 1 MS/s in
-   the snap set, halving per-channel demod CPU. The margin after the fix
-   is thin (demod wall cycle ~4.2 ms vs the 4.096 ms budget at 2 MS/s),
-   so this is the cheapest way to widen it. Caveats: touches the rate
-   model (`device_plan_capture`, RTL parity contract), and the x8 path's
-   output quality needs an A/B against x4. Note it lightens *our* CPU;
-   the daemon's IPC callback rate is set by its packet granularity and
-   may not improve.
+Idea: a single kaiser doing 125x needs 1001 taps because its
+transition band is designed against the final 16 kHz rate. In a
+cascade, each stage only has to anti-alias for the band the *next*
+stage keeps, and required tap count scales with the stage's own
+factor, not the total M. Factorize M at create time (M is always an
+integer by the rate model):
 
-2. **Restore demod headroom (two-stage decimation).**
-   The channel decimator is a single kaiser FIR run at the full capture
-   rate. Splitting it (e.g. cheap x8 half-band first, then the existing
-   narrow x16 stage) cuts per-sample input cost several-fold on every
-   backend. Pure DSP-internal change, no behavior or interface impact;
-   protects weak machines (Raspberry Pi class) where the lossless
-   producer handoff couples all channels to the slowest consumer.
+- peel factors of 2 into half-band-style stages (cheapest), then 3s
+  and 5s; a prime remainder becomes the final kaiser stage (m=4).
+  Cap the stage count.
+- M=125 -> x5·x5·x5 with 11/21/41 taps: ~190M MAC vs 449M single-stage
+  (2.4x fewer). M=76 -> x2·x2·x19 (final 153 taps). M=11 -> single
+  stage, i.e. today's behavior: unfactorizable M degenerates to the
+  status quo, so the fallback is free.
+- Implementation reuses the hand-rolled decimator's per-stage
+  machinery (taps + tail of h_len-1 + `rem` carry, causal anchor) as a
+  small stage struct, looped through ping-pong scratch buffers;
+  stages created at setup per the pre-create pattern.
 
-3. **Emergency low-rate mode (fsHz = 2 MHz, API decimation off).**
-   If the daemon is ever the bottleneck again, running the ADC at 2 MHz
-   natively removes all host-side decimation work. Known and accepted
-   cost: RSP1 low-rate ZIF is 8-bit left-justified (~18 dB worse
-   quantization floor). Acceptable for FM voice in a pinch; not a
-   default.
+Expected: kernel 6.55G -> ~2.7-3.2G Ir; program 10.40G -> ~6.6-7.2G
+(-30-35%); native ~0.92 -> ~0.60-0.70 s. The shift LUT can NOT move
+after stage 1 for this capture plan: stage-1 output Nyquist (200 kHz
+at x5) is below the ±375 kHz channel offsets, and 125 is odd so an x2
+first stage breaks the integer chain — that bonus exists only for
+plans with generous guards.
 
-4. **Pre-create pipeline filters.** — DONE 2026-09-14
-   `dsp_init_filters` (dsp.c) builds kaiser decimator, resampler,
-   de-emphasis and DC-blocker at channel setup (creator helpers shared
-   with the lazy paths, which remain as safety net). Outputs bit-exact
-   vs the lazy build. File-mode first-output latency unchanged
-   (172 -> 183 ms: the init was hidden inside startup anyway and is now
-   serialized in setup); the win is on the live path, where the spike
-   no longer lands on the first chunks / client connect.
+Validation gates, in order:
 
-5. **Daemon health monitoring.**
-   The failure mode above is invisible to our code: the API drops
-   samples internally, and every stage of ours looks healthy. Comparing
-   the configured capture rate against the actual chunk delivery rate
-   (one counter, checked once per second) would turn a "mystery gap"
-   into an actionable `WARNING: API delivering 1.15 of 2.00 MS/s`.
+1. numpy composite check: design the identical per-stage prototypes,
+   cascade the responses; require composite passband ripple <= ~0.5 dB
+   and final-rate stopband met for the real M values (11, 16, 76, 125,
+   plus one low-rate plan). Freeze the per-stage m/As rules only after
+   this passes.
+2. C build; output length must be exactly 1346688 frames on the
+   harness file — the remainder-carry gotcha now lives in N stage
+   state machines.
+3. callgrind Ir + wall-clock vs baseline; the MAC ratio should show.
+4. Audio A/B: alignment scan (composite group delay differs from the
+   single stage), expect ~35-45 dB in-band SNR and the hiss shelf at
+   the current 0.0026 level.
+
+### Full-width AVX decimation kernel
+
+Today's kernel compiles to scalar `vfmadd231ss` chains (4 interleaved
+accumulators): 2 flops/instr with good ILP — already 3x wall-clock
+over liquid's no-FMA SSE — but gcc declines to auto-vectorize the
+interleaved-complex reduction. Plan: deinterleave each chunk into
+re/im scratch (one extra pass, ~0.15G Ir), then two unit-stride
+reductions that gcc reliably vectorizes to 8-wide `vfmadd231ps`.
+
+Expected: kernel Ir per MAC ~3-4x down; compounds multiplicatively
+with the cascade above (kernel lands around 0.5-1G Ir after both).
+Sequencing matters: land the cascade first, then this works on a much
+smaller remainder.
+
+## IDEAS
+
+Unplanned and unimplemented; directions to think in if the need
+materializes.
+
+- **RSP API x8 decimation (1 MS/s snap point)**: the ADC always runs
+  at 8 MHz; x8 would put 1 MS/s in the snap set, halving per-channel
+  demod cost and doubling the 4.1 ms chunk budget — the strongest
+  real-time argument on weak machines. Costs: rate-model surgery with
+  RTL-parity care, the daemon's host-side decimation work doubles (the
+  fragile part!), and the x8 path needs an output-quality A/B.
+  Invisible in file-mode profiling.
+- **Shared coarse decimation before the fan-out**: one early stage for
+  all channels amortizes its cost across N. Geometry-limited: a shared
+  stage's output Nyquist must exceed the largest channel offset (here
+  ±375 kHz caps it at x2, and odd M breaks the integer chain), so this
+  only pays on plans with generous guards and many channels.
+- **Emergency low-rate mode** (fsHz = 2 MHz, API decimation off):
+  removes all host-side decimation work if the daemon is ever the
+  bottleneck again. Known and accepted cost: RSP1 low-rate ZIF is
+  8-bit left-justified (~18 dB worse quantization floor). A fallback,
+  never a default.
+- **Daemon health monitoring**: compare configured capture rate vs
+  actual chunk delivery rate (one counter, checked once per second)
+  and WARN on deficit — the API drops samples silently while every
+  stage of ours looks healthy. Pure observability, tiny effort.
+- **Evaluated and rejected: liquid `msresamp_crcf`**. Measured 43-49
+  Msamp/s per channel, flat across M=11/76/125 — the fractional
+  `resamp` tail stage works at input-rate filter cost and the halfband
+  chain never materializes for odd M — vs ~100+ Msamp/s for our
+  kernel: a 2-4x regression, plus a fractional output grid where the
+  rate model expects exact integer decimation. (`msresamp2` is dyadic
+  only, M=2^k.) Liquid's `resamp_rrrf` stays in the audio path
+  (16k -> 48k), where the ratio is genuinely fractional and the
+  polyphase is the right tool.
