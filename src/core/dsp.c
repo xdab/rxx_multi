@@ -64,8 +64,8 @@ int dsp_decimate_channel(struct channel_pipeline *pipeline, struct iq_buffer *bu
         return 0;
 
     unsigned int M = (unsigned int)pipeline->downsample_factor;
-    float As = 40.0f;
-    unsigned int m = 6; /* prototype filter delay */
+    float As = 35.0f;
+    unsigned int m = 4; /* prototype filter delay */
     static _Thread_local float complex temp_out[MAXIMUM_IQ_LENGTH];
 
     if (M > sizeof(pipeline->decimator_tail) / sizeof(pipeline->decimator_tail[0]))
