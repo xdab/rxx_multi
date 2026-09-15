@@ -86,6 +86,10 @@ struct channel_pipeline
     double frequency_offset;
     int frequency_shift_enabled;
     float complex prev_sample;
+    /* Working buffer for the in-place stages (NCO shift, decimation):
+     * private per pipeline, so the shared device slot is only ever
+     * read. Allocated once as part of the static demods[] array. */
+    struct iq_buffer work;
     float complex decimator_tail[2048];
     unsigned int decimator_tail_len;
     /* Decimator carry: unconsumed input samples mod M (stream position
@@ -110,12 +114,19 @@ struct device_state
     int gain_rdb;
     int lna_state;
     int agc;
-    float complex buf[MAXIMUM_IQ_LENGTH];
+    /* Ping-pong chunk slots: chunk k lives in slots[k & 1], so the
+     * producer fills one slot while the demods still read the other.
+     * A slot may be refilled only after every demod has fully consumed
+     * its previous occupant (see acquire_fill_slot in the backends). */
+    struct iq_buffer slots[2];
+    /* Chunks published so far; written only by the single producer
+     * thread, polled by the demods (volatile, inherited seq style) */
+    volatile unsigned long chunk_seq;
     uint32_t buf_len;
-    int ppm_error;      /* RTL-SDR only */
-    int direct_sampling; /* RTL-SDR only */
-    int mute;           /* RTL-SDR only */
-    int biastee;        /* RTL-SDR only */
+    int ppm_error;                        /* RTL-SDR only */
+    int direct_sampling;                  /* RTL-SDR only */
+    int mute;                             /* RTL-SDR only */
+    int biastee;                          /* RTL-SDR only */
     char input_path[STATIC_STRING_SIZE];  /* -I: play this file instead of hardware */
     char record_path[STATIC_STRING_SIZE]; /* -R: record capture to this file */
     FILE *record_file;                    /* open while recording; NULL = recording off */
@@ -125,15 +136,14 @@ struct device_state
 struct demod_state
 {
     pthread_t thread;
-    struct iq_buffer input;
     struct real_buffer output;
-    int data_ready;
-    /* Lossless handoff: producer bumps seq_delivered after posting a
-     * chunk, demod bumps seq_processed after consuming it; equal counts
-     * mean the demod holds no unconsumed chunk */
-    volatile unsigned long seq_delivered;
+    /* Lossless handoff, index-based: chunk k is always in
+     * device.slots[k & 1], so a demod only tracks how many chunks it
+     * has consumed. The producer bumps device.chunk_seq per published
+     * chunk and signals this demod's condvar; equal counts mean the
+     * demod holds no unconsumed chunk. seq_processed is bumped without
+     * a lock after consumption (volatile, inherited seq style). */
     volatile unsigned long seq_processed;
-    pthread_rwlock_t rw;
     pthread_cond_t ready;
     pthread_mutex_t ready_m;
     struct channel_pipeline pipeline;

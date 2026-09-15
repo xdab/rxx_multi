@@ -29,7 +29,7 @@ void pipeline_cleanup(struct channel_pipeline *pipeline)
 }
 
 int pipeline_process(struct channel_pipeline *pipeline,
-                     struct iq_buffer *input,
+                     const struct iq_buffer *input,
                      struct real_buffer *output)
 {
     output->len = 0;
@@ -39,10 +39,16 @@ int pipeline_process(struct channel_pipeline *pipeline,
     if (dsp_shift_frequency(pipeline, input) != 0)
         return -1;
 
-    if (dsp_decimate_channel(pipeline, input) != 0)
+    /* Shifted chunks are staged into the private work buffer; unshifted
+     * ones are decimated straight from the shared slot */
+    const struct iq_buffer *cur = input;
+    if (pipeline->frequency_shift_enabled)
+        cur = &pipeline->work;
+
+    if (dsp_decimate_channel(pipeline, cur, &pipeline->work) != 0)
         return -1;
 
-    pipeline->demodulate(pipeline, input, output);
+    pipeline->demodulate(pipeline, &pipeline->work, output);
     if (pipeline->demodulate == &demodulate_raw)
         return 0;
 

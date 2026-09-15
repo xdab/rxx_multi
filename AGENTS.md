@@ -178,13 +178,18 @@ CLI parity (`-s` sets both `rate_in` and `rate_out`).
 - **Global mutable state:** `device`, `demods[]`, `outputs[]`, `do_exit`,
   `freq_len` are file-scope in `main.c`, `extern` in `types.h` — inherited
   pattern, keep it.
-- **Do not "fix" the chunk handoff casually.** The demod/output condvar
-  handoff can coalesce (drop) chunks when a producer outruns a consumer;
-  this is inherited, inaudible in live use, and makes file-mode output
-  non-bit-reproducible. Adding per-stage backpressure deadlocks unless the
-  shutdown path (main's single broadcast signal, drain-at-exit) is redesigned
-  too — an attempted quick fix was reverted. If you take this on, design the
-  full producer-consumer handshake including EOF drain first.
+- **The chunk handoff is a lossless index-based ping-pong.** The device
+  publishes chunk k into `device.slots[k & 1]`, bumps
+  `device.chunk_seq`, and signals each demod's condvar; demods wait on
+  the level `chunk_seq > seq_processed`, consume chunk `seq_processed`
+  in place, then bump it — no per-channel copy, no per-demod rwlock,
+  no flag to coalesce. A slot is refilled only after every demod has
+  consumed its previous occupant (`acquire_fill_slot`); the NCO shift
+  stages into the private `pipeline.work`, never mutating the shared
+  slot. Shutdown needs no extra bookkeeping: EOF drain and thread-exit
+  predicates still compare the seq counters, and slots are static.
+  Keep this invariant triangle intact: index-based consumption,
+  refill-barred-until-consumed, counter-level predicates.
 
 ## Guiding principles
 

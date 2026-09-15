@@ -31,24 +31,36 @@ static void shift_lut_build(void)
         shift_lut[k] = cexpf((float)(2.0 * M_PI * (double)k / (double)SHIFT_LUT_SIZE) * I);
 }
 
-int dsp_shift_frequency(struct channel_pipeline *pipeline, struct iq_buffer *buffer)
+int dsp_shift_frequency(struct channel_pipeline *pipeline, const struct iq_buffer *input)
 {
-    if (pipeline == NULL || buffer == NULL || buffer->len <= 0 || !pipeline->frequency_shift_enabled)
+    if (pipeline == NULL || input == NULL)
+        return 0;
+
+    struct iq_buffer *out = &pipeline->work;
+
+    /* Keep the work length mirroring the chunk in every early-exit path */
+    out->len = input->len;
+    if (input->len <= 0)
+        return 0;
+
+    if (!pipeline->frequency_shift_enabled)
         return 0;
 
     pthread_once(&shift_lut_once, shift_lut_build);
 
     uint32_t acc = pipeline->shift_acc;
     const uint32_t step = pipeline->shift_step;
-    float complex *x = buffer->samples;
-    const unsigned int n = (unsigned int)buffer->len;
+    const float complex *x = input->samples;
+    float complex *o = out->samples;
+    const unsigned int n = (unsigned int)input->len;
 
     for (unsigned int i = 0; i < n; i++)
     {
-        x[i] = x[i] * shift_lut[acc >> (32 - SHIFT_LUT_BITS)];
+        o[i] = x[i] * shift_lut[acc >> (32 - SHIFT_LUT_BITS)];
         acc += step;
     }
     pipeline->shift_acc = acc;
+    out->len = input->len;
     return 0;
 }
 
@@ -263,7 +275,9 @@ static int decimator_create(struct channel_pipeline *pipeline)
     return 0;
 }
 
-int dsp_decimate_channel(struct channel_pipeline *pipeline, struct iq_buffer *buffer)
+int dsp_decimate_channel(struct channel_pipeline *pipeline,
+                         const struct iq_buffer *input,
+                         struct iq_buffer *output)
 {
     /*
      * Anti-aliasing complex decimation stage.
@@ -274,19 +288,31 @@ int dsp_decimate_channel(struct channel_pipeline *pipeline, struct iq_buffer *bu
      *   liquid's firdecim_crcf_create_kaiser(M, m, As) designs, but on a
      *   linear buffer: no circular-window rewrite per block, one dot
      *   product per output sample, history kept in decimator_tail.
+     * - Reads input, writes output; output may alias input (in-place,
+     *   the historical path when the shift stage staged into work).
      */
-    if (pipeline == NULL || buffer == NULL || buffer->len <= 0)
+    if (pipeline == NULL || input == NULL || output == NULL || input->len <= 0)
         return 0;
 
     if (pipeline->downsample_factor <= 1)
+    {
+        /* Decimation disabled: stage the untouched chunk through, so
+         * downstream stages always read the private work buffer */
+        if (output != input)
+        {
+            memcpy(output->samples, input->samples,
+                   sizeof(input->samples[0]) * (size_t)input->len);
+            output->len = input->len;
+        }
         return 0;
+    }
 
     unsigned int M = (unsigned int)pipeline->downsample_factor;
     static _Thread_local float complex temp_out[MAXIMUM_IQ_LENGTH];
 
     if (pipeline->decim_taps == NULL && decimator_create(pipeline) < 0)
     {
-        buffer->len = 0;
+        output->len = 0;
         return -1;
     }
 
@@ -294,7 +320,7 @@ int dsp_decimate_channel(struct channel_pipeline *pipeline, struct iq_buffer *bu
 
     unsigned int tail_len = pipeline->decimator_tail_len;
     unsigned int r = pipeline->decim_rem;
-    unsigned int in_len = (unsigned int)buffer->len;
+    unsigned int in_len = (unsigned int)input->len;
     unsigned int out_len = (in_len + r) / M;
     /* In-chunk offset just past the first output's window end; bumped
      * to M when the stream sits exactly on an output boundary (that
@@ -314,7 +340,7 @@ int dsp_decimate_channel(struct channel_pipeline *pipeline, struct iq_buffer *bu
         temp_out[n] = decim_dot(pipeline->decim_taps,
                                 pipeline->decimator_tail + e, split) +
                       decim_dot(pipeline->decim_taps + split,
-                                buffer->samples, h_len - split);
+                                input->samples, h_len - split);
         n++;
         e += M;
     }
@@ -324,13 +350,13 @@ int dsp_decimate_channel(struct channel_pipeline *pipeline, struct iq_buffer *bu
         for (; n + 1 < out_len; n += 2, e += 2 * M)
             decim_dot2_avx2(pipeline->decim_taps,
                             pipeline->decim_taps_pairs,
-                            buffer->samples + e - tail_len,
-                            buffer->samples + e + M - tail_len,
+                            input->samples + e - tail_len,
+                            input->samples + e + M - tail_len,
                             h_len, &temp_out[n], &temp_out[n + 1]);
         if (n < out_len)
             temp_out[n] = decim_dot_avx2(pipeline->decim_taps,
                                          pipeline->decim_taps_pairs,
-                                         buffer->samples + e - tail_len,
+                                         input->samples + e - tail_len,
                                          h_len);
     }
     else
@@ -338,25 +364,25 @@ int dsp_decimate_channel(struct channel_pipeline *pipeline, struct iq_buffer *bu
     {
         for (; n < out_len; n++, e += M)
             temp_out[n] = decim_dot(pipeline->decim_taps,
-                                    buffer->samples + e - tail_len, h_len);
+                                    input->samples + e - tail_len, h_len);
     }
 
     /* Slide the history forward by the whole chunk (unconsumed
      * remainder included), then carry the stream position mod M. */
     if (in_len >= tail_len)
-        memcpy(pipeline->decimator_tail, buffer->samples + in_len - tail_len,
+        memcpy(pipeline->decimator_tail, input->samples + in_len - tail_len,
                tail_len * sizeof(pipeline->decimator_tail[0]));
     else
     {
         memmove(pipeline->decimator_tail, pipeline->decimator_tail + in_len,
                 (tail_len - in_len) * sizeof(pipeline->decimator_tail[0]));
-        memcpy(pipeline->decimator_tail + tail_len - in_len, buffer->samples,
+        memcpy(pipeline->decimator_tail + tail_len - in_len, input->samples,
                in_len * sizeof(pipeline->decimator_tail[0]));
     }
     pipeline->decim_rem = (r + in_len) % M;
 
-    memcpy(buffer->samples, temp_out, sizeof(temp_out[0]) * (size_t)out_len);
-    buffer->len = (int)out_len;
+    memcpy(output->samples, temp_out, sizeof(temp_out[0]) * (size_t)out_len);
+    output->len = (int)out_len;
     return 0;
 }
 

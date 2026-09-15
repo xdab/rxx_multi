@@ -38,17 +38,22 @@ void *demod_thread_fn(void *arg)
     while (1)
     {
         pthread_mutex_lock(&d->ready_m);
-        while (!d->data_ready &&
-               !(do_exit && d->seq_processed == d->seq_delivered))
+        while (!(device.chunk_seq > d->seq_processed) &&
+               !(do_exit && device.chunk_seq == d->seq_processed))
             pthread_cond_wait(&d->ready, &d->ready_m);
-        if (do_exit && !d->data_ready &&
-            d->seq_processed == d->seq_delivered)
+        if (do_exit && device.chunk_seq == d->seq_processed)
         {
             pthread_mutex_unlock(&d->ready_m);
             break;
         }
-        d->data_ready = 0;
         pthread_mutex_unlock(&d->ready_m);
+
+        /* Chunk k lives in slots[k & 1]; the producer may not refill
+         * that slot until our seq_processed bump below proves we are
+         * done reading it. The mutex edge above makes the slot contents
+         * visible; the level-based predicate makes coalesced signals
+         * harmless (no chunk is ever skipped). */
+        const struct iq_buffer *input = &device.slots[d->seq_processed & 1];
 
         /* Fast-path: if output is TCP and there are no connected clients,
          * accept any pending connections then skip expensive demod processing
@@ -71,9 +76,7 @@ void *demod_thread_fn(void *arg)
             }
         }
 
-        pthread_rwlock_wrlock(&d->rw);
-        int status = pipeline_process(&d->pipeline, &d->input, &d->output);
-        pthread_rwlock_unlock(&d->rw);
+        int status = pipeline_process(&d->pipeline, input, &d->output);
 
         /* Input fully consumed - the producer may reuse it now */
         d->seq_processed++;
@@ -105,11 +108,9 @@ void *demod_thread_fn(void *arg)
 
 void demod_init(struct demod_state *s)
 {
-    s->input.len = 0;
     s->output.len = 0;
-    s->data_ready = 0;
+    s->seq_processed = 0;
     pipeline_init(&s->pipeline);
-    pthread_rwlock_init(&s->rw, NULL);
     pthread_cond_init(&s->ready, NULL);
     pthread_mutex_init(&s->ready_m, NULL);
     s->output_target = NULL;
@@ -118,7 +119,6 @@ void demod_init(struct demod_state *s)
 void demod_cleanup(struct demod_state *s)
 {
     pipeline_cleanup(&s->pipeline);
-    pthread_rwlock_destroy(&s->rw);
     pthread_cond_destroy(&s->ready);
     pthread_mutex_destroy(&s->ready_m);
 }

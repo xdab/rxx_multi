@@ -11,18 +11,18 @@
  * condvar pacing the demod pipeline expects. */
 #define CHUNK_SAMPLES (DEFAULT_BUF_LENGTH / 2)
 
-/* Record the chunk as CF32 at +-1.0 full scale: buf holds the RTL float
- * convention (~+-128), so scale by 1/128. Replay via -I multiplies by
- * 128 again - the round trip is bit-exact. */
-static void record_chunk(struct device_state *s, int complex_len)
+/* Record the chunk as CF32 at +-1.0 full scale: the slot holds the RTL
+ * float convention (~+-128), so scale by 1/128. Replay via -I
+ * multiplies by 128 again - the round trip is bit-exact. */
+static void record_chunk(struct device_state *s, const struct iq_buffer *slot)
 {
     static _Thread_local float complex rec[MAXIMUM_IQ_LENGTH];
     int i;
 
-    for (i = 0; i < complex_len; i++)
-        rec[i] = s->buf[i] * (1.0f / 128.0f);
-    if (fwrite(rec, sizeof(rec[0]), (size_t)complex_len,
-               s->record_file) != (size_t)complex_len)
+    for (i = 0; i < slot->len; i++)
+        rec[i] = slot->samples[i] * (1.0f / 128.0f);
+    if (fwrite(rec, sizeof(rec[0]), (size_t)slot->len,
+               s->record_file) != (size_t)slot->len)
     {
         fprintf(stderr, "IQ recording write failed, stopping recording\n");
         fclose(s->record_file);
@@ -30,49 +30,60 @@ static void record_chunk(struct device_state *s, int complex_len)
     }
 }
 
-/* Lossless handoff: block until every demod has fully consumed the
- * previous chunk (seq_processed == seq_delivered) before this chunk
- * overwrites s->buf / d->input. Abort on do_exit. */
-static void wait_demods_drained(void)
+/* Acquire the fill slot for chunk k = s->chunk_seq: slots[k & 1] last
+ * held chunk k-2, so it may be refilled only once every demod has fully
+ * consumed it (seq_processed >= k-1). The first two chunks find both
+ * slots free. Abort on do_exit. */
+static struct iq_buffer *acquire_fill_slot(struct device_state *s)
+{
+    unsigned long k = s->chunk_seq;
+
+    if (k >= 2)
+    {
+        for (int i = 0; i < freq_len; i++)
+        {
+            struct demod_state *d = &demods[i];
+            while (!do_exit && d->seq_processed < k - 1)
+                usleep(50);
+        }
+    }
+
+    if (do_exit)
+        return NULL;
+
+    return &s->slots[k & 1];
+}
+
+/* EOF drain: block until every demod has fully consumed all published
+ * chunks (seq_processed == chunk_seq). Abort on do_exit. */
+static void wait_demods_drained(struct device_state *s)
 {
     for (int i = 0; i < freq_len; i++)
     {
         struct demod_state *d = &demods[i];
-        while (!do_exit && d->seq_processed != d->seq_delivered)
+        while (!do_exit && d->seq_processed != s->chunk_seq)
             usleep(50);
     }
 }
 
-/* Deliver a converted chunk to every demod[] via fan-out
- * (single-channel mode is the N=1 case of the same loop) */
-static void deliver_buf(struct device_state *s, int complex_len)
+/* Publish a filled slot to every demod[] via fan-out (single-channel
+ * mode is the N=1 case of the same loop). No copy: demods find the
+ * chunk by index in slots[k & 1]. Bump chunk_seq BEFORE signalling:
+ * the demod predicate is level-based on the counter, so a signal that
+ * races or coalesces can never lose a chunk; the mutex handoff in the
+ * signal makes the slot contents visible. */
+static void deliver_buf(struct device_state *s, struct iq_buffer *slot)
 {
     if (do_exit)
         return;
 
-    wait_demods_drained();
-
-    if (do_exit)
-        return;
-
     if (s->record_file)
-        record_chunk(s, complex_len);
+        record_chunk(s, slot);
+
+    s->chunk_seq++;
 
     for (int i = 0; i < freq_len; i++)
-    {
-        struct demod_state *d = &demods[i];
-
-        pthread_rwlock_wrlock(&d->rw);
-        memcpy(d->input.samples, s->buf, sizeof(s->buf[0]) * (size_t)complex_len);
-        d->input.len = complex_len;
-        d->seq_delivered++;
-        pthread_rwlock_unlock(&d->rw);
-
-        pthread_mutex_lock(&d->ready_m);
-        d->data_ready = 1;
-        pthread_cond_signal(&d->ready);
-        pthread_mutex_unlock(&d->ready_m);
-    }
+        safe_cond_signal(&demods[i].ready, &demods[i].ready_m);
 }
 
 /* RTL-SDR callback - converts raw USB samples */
@@ -98,14 +109,19 @@ static void rtlsdr_callback(unsigned char *buf, uint32_t len, void *ctx)
     if (complex_len > MAXIMUM_IQ_LENGTH)
         complex_len = MAXIMUM_IQ_LENGTH;
 
+    struct iq_buffer *slot = acquire_fill_slot(s);
+    if (!slot)
+        return;
+
     for (i = 0; i < complex_len; i++)
     {
         float inphase = (float)((int)buf[2 * i] - 127);
         float quadrature = (float)((int)buf[2 * i + 1] - 127);
-        s->buf[i] = inphase + I * quadrature;
+        slot->samples[i] = inphase + I * quadrature;
     }
+    slot->len = complex_len;
 
-    deliver_buf(s, complex_len);
+    deliver_buf(s, slot);
 }
 
 /* Raw IQ file playback (-I test mode). Input is interleaved float32 I/Q
@@ -137,17 +153,22 @@ void *file_input_thread_fn(void *arg)
             break;
         }
 
-        for (size_t i = 0; i < got; i++)
-            s->buf[i] = raw[i] * 128.0f;
+        struct iq_buffer *slot = acquire_fill_slot(s);
+        if (!slot)
+            break;
 
-        deliver_buf(s, (int)got);
+        for (size_t i = 0; i < got; i++)
+            slot->samples[i] = raw[i] * 128.0f;
+        slot->len = (int)got;
+
+        deliver_buf(s, slot);
     }
 
     fclose(f);
 
     /* EOF drain: every delivered chunk must be fully consumed (and its
      * audio flagged to the output) before shutdown begins */
-    wait_demods_drained();
+    wait_demods_drained(s);
 
     fprintf(stderr, "IQ input file exhausted, exiting...\n");
     do_exit = 1;
