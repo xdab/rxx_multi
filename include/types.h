@@ -122,6 +122,11 @@ struct device_state
     /* Chunks published so far; written only by the single producer
      * thread, polled by the demods (volatile, inherited seq style) */
     volatile unsigned long chunk_seq;
+    /* Producer refill bar: demods broadcast here after bumping
+     * seq_processed so acquire_fill_slot / wait_demods_drained (in the
+     * backends) can block on the seq predicates instead of polling */
+    pthread_cond_t slots_drained;
+    pthread_mutex_t slots_drained_m;
     uint32_t buf_len;
     int ppm_error;                        /* RTL-SDR only */
     int direct_sampling;                  /* RTL-SDR only */
@@ -195,6 +200,10 @@ struct output_state
      * output has drained everything packed so far */
     volatile unsigned long seq_packed;
     volatile unsigned long seq_written;
+    /* Demod blocks here while the output stage drains (seq_written
+     * catches up to seq_packed); broadcast after every seq_written++ */
+    pthread_cond_t written;
+    pthread_mutex_t written_m;
     pthread_rwlock_t rw;
     pthread_cond_t ready;
     pthread_mutex_t ready_m;

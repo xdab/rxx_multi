@@ -13,6 +13,14 @@
         pthread_mutex_unlock(m); \
     } while (0)
 
+#define safe_cond_broadcast(n, m)  \
+    do                             \
+    {                              \
+        pthread_mutex_lock(m);     \
+        pthread_cond_broadcast(n); \
+        pthread_mutex_unlock(m);   \
+    } while (0)
+
 /* Thread functions */
 void *device_thread_fn(void *arg);
 void *file_input_thread_fn(void *arg);

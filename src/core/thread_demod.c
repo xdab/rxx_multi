@@ -30,6 +30,16 @@ static void pack_output_samples(struct output_state *out, const float *samples, 
     out->result_len = copy_len;
 }
 
+/* Announce chunk consumption to the producer: acquire_fill_slot (in
+ * the backends) bars slot refill until seq_processed advances, so it
+ * blocks on device.slots_drained and needs this broadcast. The mutex
+ * edge also publishes the unlocked seq_processed bump. */
+static void demod_signal_consumed(struct demod_state *d)
+{
+    (void)d;
+    safe_cond_broadcast(&device.slots_drained, &device.slots_drained_m);
+}
+
 void *demod_thread_fn(void *arg)
 {
     struct demod_state *d = arg;
@@ -72,6 +82,7 @@ void *demod_thread_fn(void *arg)
             {
                 /* Chunk consumed and discarded - unblock the producer */
                 d->seq_processed++;
+                demod_signal_consumed(d);
                 continue;
             }
         }
@@ -80,6 +91,7 @@ void *demod_thread_fn(void *arg)
 
         /* Input fully consumed - the producer may reuse it now */
         d->seq_processed++;
+        demod_signal_consumed(d);
 
         if (status != 0)
         {
@@ -88,9 +100,14 @@ void *demod_thread_fn(void *arg)
         }
 
         /* Lossless handoff: wait until the output stage has written
-         * everything packed so far before overwriting o->result */
+         * everything packed so far before overwriting o->result. The
+         * output broadcasts written after every seq_written++, so the
+         * wait cannot miss a wakeup: seq_written == seq_packed can
+         * only become false again after we pack, under o->rw. */
+        pthread_mutex_lock(&o->written_m);
         while (!do_exit && o->seq_written != o->seq_packed)
-            usleep(100);
+            pthread_cond_wait(&o->written, &o->written_m);
+        pthread_mutex_unlock(&o->written_m);
 
         pthread_rwlock_wrlock(&o->rw);
         pack_output_samples(o, d->output.samples, d->output.len);

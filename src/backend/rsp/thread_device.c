@@ -48,19 +48,30 @@ static void record_chunk(struct device_state *s, const struct iq_buffer *slot)
 /* Acquire the fill slot for chunk k = s->chunk_seq: slots[k & 1] last
  * held chunk k-2, so it may be refilled only once every demod has fully
  * consumed it (seq_processed >= k-1). The first two chunks find both
- * slots free. Abort on do_exit. */
+ * slots free. Demods broadcast slots_drained after every consumption
+ * bump, so the level-based predicate cannot miss a wakeup. Abort on
+ * do_exit. */
 static struct iq_buffer *acquire_fill_slot(struct device_state *s)
 {
     unsigned long k = s->chunk_seq;
 
     if (k >= 2)
     {
-        for (int i = 0; i < freq_len; i++)
+        pthread_mutex_lock(&s->slots_drained_m);
+        while (!do_exit)
         {
-            struct demod_state *d = &demods[i];
-            while (!do_exit && d->seq_processed < k - 1)
-                usleep(50);
+            int drained = 1;
+            for (int i = 0; i < freq_len; i++)
+                if (demods[i].seq_processed < k - 1)
+                {
+                    drained = 0;
+                    break;
+                }
+            if (drained)
+                break;
+            pthread_cond_wait(&s->slots_drained, &s->slots_drained_m);
         }
+        pthread_mutex_unlock(&s->slots_drained_m);
     }
 
     if (do_exit)
@@ -73,12 +84,21 @@ static struct iq_buffer *acquire_fill_slot(struct device_state *s)
  * chunks (seq_processed == chunk_seq). Abort on do_exit. */
 static void wait_demods_drained(struct device_state *s)
 {
-    for (int i = 0; i < freq_len; i++)
+    pthread_mutex_lock(&s->slots_drained_m);
+    while (!do_exit)
     {
-        struct demod_state *d = &demods[i];
-        while (!do_exit && d->seq_processed != s->chunk_seq)
-            usleep(50);
+        int drained = 1;
+        for (int i = 0; i < freq_len; i++)
+            if (demods[i].seq_processed != s->chunk_seq)
+            {
+                drained = 0;
+                break;
+            }
+        if (drained)
+            break;
+        pthread_cond_wait(&s->slots_drained, &s->slots_drained_m);
     }
+    pthread_mutex_unlock(&s->slots_drained_m);
 }
 
 /* Publish a filled slot to every demod[] via fan-out (single-channel
@@ -295,4 +315,6 @@ void device_init_state(struct device_state *s)
     s->gain_rdb = -1;
     s->lna_state = -1;
     s->agc = 1;
+    pthread_cond_init(&s->slots_drained, NULL);
+    pthread_mutex_init(&s->slots_drained_m, NULL);
 }

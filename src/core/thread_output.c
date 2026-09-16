@@ -40,6 +40,10 @@ void *output_thread_fn(void *arg)
 
         pthread_rwlock_unlock(&s->rw);
         s->seq_written++;
+
+        /* Release the demod blocked on the lossless handoff (it waits
+         * for seq_written to catch up with seq_packed) */
+        safe_cond_broadcast(&s->written, &s->written_m);
     }
 
     return 0;
@@ -52,6 +56,8 @@ void output_init(struct output_state *s)
     pthread_rwlock_init(&s->rw, NULL);
     pthread_cond_init(&s->ready, NULL);
     pthread_mutex_init(&s->ready_m, NULL);
+    pthread_cond_init(&s->written, NULL);
+    pthread_mutex_init(&s->written_m, NULL);
 }
 
 void output_cleanup(struct output_state *s)
@@ -65,4 +71,6 @@ void output_cleanup(struct output_state *s)
     pthread_rwlock_destroy(&s->rw);
     pthread_cond_destroy(&s->ready);
     pthread_mutex_destroy(&s->ready_m);
+    pthread_cond_destroy(&s->written);
+    pthread_mutex_destroy(&s->written_m);
 }
