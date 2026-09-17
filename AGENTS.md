@@ -47,6 +47,11 @@ No test suite exists. Verification options:
   channel, converts to WAV in `/tmp/opencode`. Judge by ear against SDR++
   with the antenna in the same physical position.
 - **RTL backend:** run against a dongle and compare by ear, same method.
+- **Profiling (callgrind, no hardware):** follow `docs/PROFILING.md` — build
+  with `make profile-rtl` / `make profile-rsp`, profile the `-I` file mode
+  (baseline + optional live-TCP-clients variant), and read results with
+  `callgrind_annotate`. Latest recorded results: `docs/profiling_results.md`
+  (results docs stay uncommitted).
 
 ## Architecture
 
