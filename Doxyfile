@@ -3,11 +3,12 @@
 PROJECT_NAME           = "rxx_multi"
 PROJECT_BRIEF          = "Multi-channel narrowband SDR receiver/demodulator"
 
-# Sources only; no test/tool scripts
-INPUT                  = include src
+# Sources + README (front page); no test/tool scripts
+INPUT                  = include src README.md
 RECURSIVE              = YES
 FILE_PATTERNS          = *.c *.h
 EXCLUDE_PATTERNS       = */obj/*
+USE_MDFILE_AS_MAINPAGE = README.md
 
 # Document everything, even entities without a doc comment
 EXTRACT_ALL            = YES

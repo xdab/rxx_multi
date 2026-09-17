@@ -103,9 +103,8 @@ void options_print_channels(const options_t *opts);
 
 /**
  * @brief Backend option hook; consumes device flags (-g, -L, -p, ...).
- * @see device_parse_option in device.h for the full contract.
  *
- * @retval 0 if handled, -1 on error, 1 if not recognized.
+ * @see device_parse_option in device.h for the full contract.
  */
 int device_parse_option(int opt, const char *optarg, options_t *opts);
 
