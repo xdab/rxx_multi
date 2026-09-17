@@ -10,15 +10,12 @@
 #include <immintrin.h>
 #endif
 
-/* Channel-shift oscillator: precomputed unit-phasor lookup table driven
- * by a 32-bit DDS phase accumulator, mixing in place. Replaces liquid's
- * per-sample nco_crcf_mix_block_down (object state + nearest-bin 1024
- * table) with one integer add, a table index and a complex multiply,
- * and drops the temp-buffer memcpy. No drift: table entries are exact
- * unit phasors and the integer accumulator never loses magnitude.
- * Worst-case phase error is half the table grid, 2*pi/2^(BITS+1), i.e.
- * ~-86 dB spurs for 16 bits - below liquid's own 1024-entry table
- * (-66 dB) and far below the FM noise floor. */
+/* LUT + 32-bit integer DDS replaces liquid's nco_crcf mixing (object
+ * state, 1024-bin table, temp-buffer memcpy) with one integer add, a
+ * table index and a complex multiply. No drift: entries are exact unit
+ * phasors and the accumulator never loses magnitude; worst-case spur is
+ * half the table grid, 2*pi/2^(BITS+1) ~ -86 dB, below liquid's own
+ * 1024-entry table (-66 dB) and the FM noise floor. */
 #define SHIFT_LUT_BITS 16
 #define SHIFT_LUT_SIZE (1u << SHIFT_LUT_BITS)
 
@@ -64,14 +61,11 @@ int dsp_shift_frequency(struct channel_pipeline *pipeline, const struct iq_buffe
     return 0;
 }
 
-/* FIR decimator inner kernel: complex input x real taps, plain C with
- * restrict and 4 interleaved accumulators (limits float rounding depth
- * to liquid's run4 grouping; also the classic auto-vectorization
- * pattern) so -O3 -march=native emits AVX FMA (liquid's dotprod_crcf_run4
- * is a 4-wide SSE-era kernel without FMA). */
-static inline float complex decim_dot(const float *restrict h,
-                                      const float complex *restrict x,
-                                      unsigned int n_taps)
+/* Inner kernel: complex x real-taps dot with 4 interleaved accumulators
+ * - matches liquid's run4 rounding depth and lets -O3 -march=native
+ * emit AVX FMA. */
+static inline float complex
+decim_dot(const float *restrict h, const float complex *restrict x, unsigned int n_taps)
 {
     const float *restrict xf = (const float *)x;
     float ar0 = 0.0f, ai0 = 0.0f;
@@ -102,44 +96,32 @@ static inline float complex decim_dot(const float *restrict h,
 }
 
 #if defined(__AVX2__) && defined(__FMA__)
-/* AVX2/FMA bulk decimation kernels, replacing the scalar decim_dot on
- * the outputs whose windows sit fully inside the chunk. Validated in
- * tools/simd_decim_bench.c against the scalar kernel on the production
- * hot-path shape (65 x 1001-tap dots per 8192-sample chunk): 3.8x
- * wall-clock (Zen 2), outputs differ only by float summation order.
- *
- * decim_taps_pairs is the tap vector broadcast to lane pairs, 8 floats
- * per 4 taps (h0,h0,h1,h1,h2,h2,h3,h3): one _mm256 FMMA then
- * accumulates one complex tap-multiply, lanes alternating (re, im).
- *
- * decim_dot2_avx2 processes TWO output windows per pass (windows
- * advance by M < h_len, so consecutive outputs re-read the taps): the
- * tap load feeds both an A-window and a B-window FMA, cutting the
- * kernel from 2 loads/dot to 1.5 loads/dot — that is what lifts
- * throughput on load-port-limited cores beyond the ~2.9x of the
- * single-window kernel.
- *
- * Both kernels keep the scalar path for: non-AVX2 builds, the <= 8
- * boundary outputs straddling decimator_tail, the h_len % 4 tail
+/* AVX2/FMA bulk kernels, replacing the scalar dot on outputs whose
+ * windows sit fully inside the chunk. Validated in
+ * tools/simd_decim_bench.c (3.8x wall-clock on Zen 2; outputs differ
+ * only by float summation order). decim_dot2_avx2 processes TWO output
+ * windows per pass - the tap load feeds both, cutting the kernel to
+ * 1.5 loads/dot. The scalar path remains for: non-AVX2 builds, the
+ * <= 8 boundary outputs straddling decimator_tail, the h_len % 4 tail
  * taps, and the odd last output of a chunk. */
 
 /* horizontal fold of 8 accumulators with (re,im) alternating lanes */
-static inline float complex avx_hsum_pairs(__m256 a0, __m256 a1,
-                                           __m256 a2, __m256 a3)
+static inline float complex avx_hsum_pairs(__m256 a0, __m256 a1, __m256 a2, __m256 a3)
 {
     __m256 acc = _mm256_add_ps(_mm256_add_ps(a0, a1), _mm256_add_ps(a2, a3));
-    __m128 sum = _mm_add_ps(_mm256_castps256_ps128(acc),
-                            _mm256_extractf128_ps(acc, 1));
+    __m128 sum = _mm_add_ps(_mm256_castps256_ps128(acc), _mm256_extractf128_ps(acc, 1));
     __m128 sum2 = _mm_add_ps(sum, _mm_movehl_ps(sum, sum));
     float out[2]; /* {re_total, im_total} in lanes 0, 1 */
     _mm_storel_pi((__m64 *)out, sum2);
     return out[0] + out[1] * I;
 }
 
-static inline float complex decim_dot_avx2(const float *restrict taps,
-                                           const float *restrict pairs,
-                                           const float complex *restrict x,
-                                           unsigned int n_taps)
+static inline float complex decim_dot_avx2(
+    const float *restrict taps,
+    const float *restrict pairs,
+    const float complex *restrict x,
+    unsigned int n_taps
+)
 {
     const float *restrict xf = (const float *)x;
     unsigned int n4 = n_taps / 4;
@@ -149,18 +131,21 @@ static inline float complex decim_dot_avx2(const float *restrict taps,
     unsigned int j = 0;
     for (; j + 4 <= n4; j += 4)
     {
-        a0 = _mm256_fmadd_ps(_mm256_loadu_ps(xf + 8 * (j + 0)),
-                             _mm256_loadu_ps(pairs + 8 * (j + 0)), a0);
-        a1 = _mm256_fmadd_ps(_mm256_loadu_ps(xf + 8 * (j + 1)),
-                             _mm256_loadu_ps(pairs + 8 * (j + 1)), a1);
-        a2 = _mm256_fmadd_ps(_mm256_loadu_ps(xf + 8 * (j + 2)),
-                             _mm256_loadu_ps(pairs + 8 * (j + 2)), a2);
-        a3 = _mm256_fmadd_ps(_mm256_loadu_ps(xf + 8 * (j + 3)),
-                             _mm256_loadu_ps(pairs + 8 * (j + 3)), a3);
+        a0 = _mm256_fmadd_ps(
+            _mm256_loadu_ps(xf + 8 * (j + 0)), _mm256_loadu_ps(pairs + 8 * (j + 0)), a0
+        );
+        a1 = _mm256_fmadd_ps(
+            _mm256_loadu_ps(xf + 8 * (j + 1)), _mm256_loadu_ps(pairs + 8 * (j + 1)), a1
+        );
+        a2 = _mm256_fmadd_ps(
+            _mm256_loadu_ps(xf + 8 * (j + 2)), _mm256_loadu_ps(pairs + 8 * (j + 2)), a2
+        );
+        a3 = _mm256_fmadd_ps(
+            _mm256_loadu_ps(xf + 8 * (j + 3)), _mm256_loadu_ps(pairs + 8 * (j + 3)), a3
+        );
     }
     for (; j < n4; j++)
-        a0 = _mm256_fmadd_ps(_mm256_loadu_ps(xf + 8 * j),
-                             _mm256_loadu_ps(pairs + 8 * j), a0);
+        a0 = _mm256_fmadd_ps(_mm256_loadu_ps(xf + 8 * j), _mm256_loadu_ps(pairs + 8 * j), a0);
 
     float complex res = avx_hsum_pairs(a0, a1, a2, a3);
     for (unsigned int k = 4 * n4; k < n_taps; k++)
@@ -168,13 +153,15 @@ static inline float complex decim_dot_avx2(const float *restrict taps,
     return res;
 }
 
-static inline void decim_dot2_avx2(const float *restrict taps,
-                                   const float *restrict pairs,
-                                   const float complex *restrict xa,
-                                   const float complex *restrict xb,
-                                   unsigned int n_taps,
-                                   float complex *restrict ra,
-                                   float complex *restrict rb)
+static inline void decim_dot2_avx2(
+    const float *restrict taps,
+    const float *restrict pairs,
+    const float complex *restrict xa,
+    const float complex *restrict xb,
+    unsigned int n_taps,
+    float complex *restrict ra,
+    float complex *restrict rb
+)
 {
     const float *restrict fa = (const float *)xa;
     const float *restrict fb = (const float *)xb;
@@ -217,8 +204,7 @@ static inline void decim_dot2_avx2(const float *restrict taps,
 }
 #endif /* __AVX2__ && __FMA__ */
 
-/* Kaiser prototype + decimator state for one channel; shared by the
- * setup-time pre-creation (dsp_init_filters) and the lazy path. */
+/* Kaiser prototype + decimator state for one channel. */
 static int decimator_create(struct channel_pipeline *pipeline)
 {
     unsigned int M = (unsigned int)pipeline->downsample_factor;
@@ -238,8 +224,7 @@ static int decimator_create(struct channel_pipeline *pipeline)
         fprintf(stderr, "Failed to allocate %u decimator taps\n", h_len);
         return -1;
     }
-    liquid_firdes_kaiser(h_len, 1.0f / (float)M, As, 0.0f,
-                         pipeline->decim_taps);
+    liquid_firdes_kaiser(h_len, 1.0f / (float)M, As, 0.0f, pipeline->decim_taps);
     pipeline->decim_taps_len = h_len;
     /* History starts zeroed (window warm-up): pipeline_init's memset
      * already zeroed decimator_tail, so just mark it full. */
@@ -256,17 +241,13 @@ static int decimator_create(struct channel_pipeline *pipeline)
         for (unsigned int j = 0; 4 * j + 3 < h_len; j++)
         {
             for (int r = 0; r < 2; r++)
-                pipeline->decim_taps_pairs[8 * j + r] =
-                    pipeline->decim_taps[4 * j];
+                pipeline->decim_taps_pairs[8 * j + r] = pipeline->decim_taps[4 * j];
             for (int r = 0; r < 2; r++)
-                pipeline->decim_taps_pairs[8 * j + 2 + r] =
-                    pipeline->decim_taps[4 * j + 1];
+                pipeline->decim_taps_pairs[8 * j + 2 + r] = pipeline->decim_taps[4 * j + 1];
             for (int r = 0; r < 2; r++)
-                pipeline->decim_taps_pairs[8 * j + 4 + r] =
-                    pipeline->decim_taps[4 * j + 2];
+                pipeline->decim_taps_pairs[8 * j + 4 + r] = pipeline->decim_taps[4 * j + 2];
             for (int r = 0; r < 2; r++)
-                pipeline->decim_taps_pairs[8 * j + 6 + r] =
-                    pipeline->decim_taps[4 * j + 3];
+                pipeline->decim_taps_pairs[8 * j + 6 + r] = pipeline->decim_taps[4 * j + 3];
         }
     }
 #else
@@ -275,22 +256,10 @@ static int decimator_create(struct channel_pipeline *pipeline)
     return 0;
 }
 
-int dsp_decimate_channel(struct channel_pipeline *pipeline,
-                         const struct iq_buffer *input,
-                         struct iq_buffer *output)
+int dsp_decimate_channel(
+    struct channel_pipeline *pipeline, const struct iq_buffer *input, struct iq_buffer *output
+)
 {
-    /*
-     * Anti-aliasing complex decimation stage.
-     * - Purpose: remove spectral content above the new Nyquist (fs_out/2)
-     *   before downsampling so high-frequency energy does not alias into
-     *   the passband.
-     * - Behavior: streaming FIR with the same kaiser prototype that
-     *   liquid's firdecim_crcf_create_kaiser(M, m, As) designs, but on a
-     *   linear buffer: no circular-window rewrite per block, one dot
-     *   product per output sample, history kept in decimator_tail.
-     * - Reads input, writes output; output may alias input (in-place,
-     *   the historical path when the shift stage staged into work).
-     */
     if (pipeline == NULL || input == NULL || output == NULL || input->len <= 0)
         return 0;
 
@@ -300,8 +269,7 @@ int dsp_decimate_channel(struct channel_pipeline *pipeline,
          * downstream stages always read the private work buffer */
         if (output != input)
         {
-            memcpy(output->samples, input->samples,
-                   sizeof(input->samples[0]) * (size_t)input->len);
+            memcpy(output->samples, input->samples, sizeof(input->samples[0]) * (size_t)input->len);
             output->len = input->len;
         }
         return 0;
@@ -337,10 +305,8 @@ int dsp_decimate_channel(struct channel_pipeline *pipeline,
     {
         unsigned int split = tail_len - e;
 
-        temp_out[n] = decim_dot(pipeline->decim_taps,
-                                pipeline->decimator_tail + e, split) +
-                      decim_dot(pipeline->decim_taps + split,
-                                input->samples, h_len - split);
+        temp_out[n] = decim_dot(pipeline->decim_taps, pipeline->decimator_tail + e, split) +
+                      decim_dot(pipeline->decim_taps + split, input->samples, h_len - split);
         n++;
         e += M;
     }
@@ -348,36 +314,50 @@ int dsp_decimate_channel(struct channel_pipeline *pipeline,
     if (pipeline->decim_taps_pairs != NULL)
     {
         for (; n + 1 < out_len; n += 2, e += 2 * M)
-            decim_dot2_avx2(pipeline->decim_taps,
-                            pipeline->decim_taps_pairs,
-                            input->samples + e - tail_len,
-                            input->samples + e + M - tail_len,
-                            h_len, &temp_out[n], &temp_out[n + 1]);
+            decim_dot2_avx2(
+                pipeline->decim_taps,
+                pipeline->decim_taps_pairs,
+                input->samples + e - tail_len,
+                input->samples + e + M - tail_len,
+                h_len,
+                &temp_out[n],
+                &temp_out[n + 1]
+            );
         if (n < out_len)
-            temp_out[n] = decim_dot_avx2(pipeline->decim_taps,
-                                         pipeline->decim_taps_pairs,
-                                         input->samples + e - tail_len,
-                                         h_len);
+            temp_out[n] = decim_dot_avx2(
+                pipeline->decim_taps,
+                pipeline->decim_taps_pairs,
+                input->samples + e - tail_len,
+                h_len
+            );
     }
     else
 #endif
     {
         for (; n < out_len; n++, e += M)
-            temp_out[n] = decim_dot(pipeline->decim_taps,
-                                    input->samples + e - tail_len, h_len);
+            temp_out[n] = decim_dot(pipeline->decim_taps, input->samples + e - tail_len, h_len);
     }
 
     /* Slide the history forward by the whole chunk (unconsumed
      * remainder included), then carry the stream position mod M. */
     if (in_len >= tail_len)
-        memcpy(pipeline->decimator_tail, input->samples + in_len - tail_len,
-               tail_len * sizeof(pipeline->decimator_tail[0]));
+        memcpy(
+            pipeline->decimator_tail,
+            input->samples + in_len - tail_len,
+            tail_len * sizeof(pipeline->decimator_tail[0])
+        );
     else
     {
-        memmove(pipeline->decimator_tail, pipeline->decimator_tail + in_len,
-                (tail_len - in_len) * sizeof(pipeline->decimator_tail[0]));
-        memcpy(pipeline->decimator_tail + tail_len - in_len, input->samples,
-               in_len * sizeof(pipeline->decimator_tail[0]));
+        memmove(
+            pipeline->decimator_tail,
+            pipeline->decimator_tail + in_len,
+            (tail_len - in_len) * sizeof(pipeline->decimator_tail[0])
+        );
+        memcpy(
+            pipeline->decimator_tail + tail_len - in_len,
+            input->samples,
+            in_len * sizeof(pipeline->decimator_tail[0])
+        );
     }
     pipeline->decim_rem = (r + in_len) % M;
 
@@ -423,11 +403,9 @@ int dsp_resample_output(struct channel_pipeline *pipeline, struct real_buffer *b
         return -1;
 
     unsigned int out_len = 0;
-    resamp_rrrf_execute_block(pipeline->audio_resampler,
-                              buffer->samples,
-                              in_len,
-                              temp_buf,
-                              &out_len);
+    resamp_rrrf_execute_block(
+        pipeline->audio_resampler, buffer->samples, in_len, temp_buf, &out_len
+    );
 
     unsigned int copy_len = out_len;
     if (copy_len > MAXIMUM_BUF_LENGTH)
@@ -443,7 +421,8 @@ int dsp_resample_output(struct channel_pipeline *pipeline, struct real_buffer *b
 static int deemph_create(struct channel_pipeline *pipeline)
 {
     float tau = 75e-6f;
-    float Fs = (pipeline->demod_rate > 0) ? (float)pipeline->demod_rate : (float)pipeline->output_rate;
+    float Fs =
+        (pipeline->demod_rate > 0) ? (float)pipeline->demod_rate : (float)pipeline->output_rate;
     float d;
     float b0;
 
@@ -521,11 +500,6 @@ float dsp_polar_discriminant(float complex current, float complex previous)
     return atan2f(cimagf(delta), crealf(delta)) / M_PI * (float)(1 << 14);
 }
 
-/* Pre-create a channel's filter objects at setup time so the first
- * processed chunk does not pay the lazy-init spike (~80 ms per channel,
- * visible as a stall right when a TCP client connects). Call after the
- * pipeline's rates, decimation factor and mode flags are set; the lazy
- * paths in the dsp_* functions remain as a safety net. */
 int dsp_init_filters(struct channel_pipeline *pipeline)
 {
     if (pipeline == NULL)
@@ -533,11 +507,10 @@ int dsp_init_filters(struct channel_pipeline *pipeline)
     if (pipeline->downsample_factor > 1 && pipeline->decim_taps == NULL &&
         decimator_create(pipeline) < 0)
         return -1;
-    if (pipeline->demod_rate != pipeline->output_rate &&
-        pipeline->audio_resampler == NULL && resampler_create(pipeline) < 0)
+    if (pipeline->demod_rate != pipeline->output_rate && pipeline->audio_resampler == NULL &&
+        resampler_create(pipeline) < 0)
         return -1;
-    if (pipeline->deemph_enabled && pipeline->deemph_filter == NULL &&
-        deemph_create(pipeline) < 0)
+    if (pipeline->deemph_enabled && pipeline->deemph_filter == NULL && deemph_create(pipeline) < 0)
         return -1;
     if (pipeline->dc_block_enabled && pipeline->dc_block_filter == NULL &&
         dcblock_create(pipeline) < 0)

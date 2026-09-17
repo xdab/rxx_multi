@@ -121,9 +121,14 @@ void tcp_accept_clients(struct output_state *s)
 
         char client_ip[INET_ADDRSTRLEN];
         inet_ntop(AF_INET, &client_addr.sin_addr, client_ip, sizeof(client_ip));
-        fprintf(stderr, "TCP: client [%d] connected from %s:%d (total: %d)\n",
-                available_slot, client_ip, ntohs(client_addr.sin_port),
-                s->net.tcp.client_count);
+        fprintf(
+            stderr,
+            "TCP: client [%d] connected from %s:%d (total: %d)\n",
+            available_slot,
+            client_ip,
+            ntohs(client_addr.sin_port),
+            s->net.tcp.client_count
+        );
     }
 }
 
@@ -136,8 +141,12 @@ void tcp_remove_client(struct output_state *s, int client_slot)
         close(s->net.tcp.client_fd[client_slot]);
         s->net.tcp.client_fd[client_slot] = -1;
         s->net.tcp.client_count--;
-        fprintf(stderr, "TCP: client [%d] disconnected (total: %d)\n",
-                client_slot, s->net.tcp.client_count);
+        fprintf(
+            stderr,
+            "TCP: client [%d] disconnected (total: %d)\n",
+            client_slot,
+            s->net.tcp.client_count
+        );
     }
 
     pthread_mutex_unlock(&s->net.tcp.clients_m);
@@ -175,8 +184,7 @@ void tcp_broadcast(struct output_state *s, int16_t *samples, int count)
                 close(fd);
                 s->net.tcp.client_fd[i] = -1;
                 s->net.tcp.client_count--;
-                fprintf(stderr, "TCP: client [%d] lost (total: %d)\n",
-                        i, s->net.tcp.client_count);
+                fprintf(stderr, "TCP: client [%d] lost (total: %d)\n", i, s->net.tcp.client_count);
             }
             /* EAGAIN/EWOULDBLOCK: try again next buffer */
             /* EINTR: try again next buffer */
@@ -187,8 +195,9 @@ void tcp_broadcast(struct output_state *s, int16_t *samples, int count)
             close(fd);
             s->net.tcp.client_fd[i] = -1;
             s->net.tcp.client_count--;
-            fprintf(stderr, "TCP: client [%d] buffer overflow (total: %d)\n",
-                    i, s->net.tcp.client_count);
+            fprintf(
+                stderr, "TCP: client [%d] buffer overflow (total: %d)\n", i, s->net.tcp.client_count
+            );
         }
     }
 

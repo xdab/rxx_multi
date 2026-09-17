@@ -94,6 +94,14 @@ uninstall:
 	rm -f /usr/local/bin/rtl_multi /usr/local/bin/rsp_multi
 	@echo "✓ Uninstalled"
 
+# API docs (Doxyfile at repo root; output in docs/doxygen/html)
+.PHONY: doc
+doc:
+	@command -v doxygen >/dev/null 2>&1 || { \
+		echo "ERROR: doxygen not installed (Arch: sudo pacman -S doxygen)"; exit 1; }
+	doxygen Doxyfile
+	@echo "✓ API docs: docs/doxygen/html/index.html"
+
 # Help target
 .PHONY: help
 help:
@@ -104,6 +112,7 @@ help:
 	@echo "  rsp         - Build bin/rsp_multi (SDRplay API v3)"
 	@echo "  profile     - Build bin/*.prof with debug symbols (valgrind/callgrind)"
 	@echo "  clean       - Remove build artifacts (obj/, bin/)"
+	@echo "  doc         - Generate API docs with doxygen"
 	@echo "  install     - Install both binaries to /usr/local/bin"
 	@echo ""
 	@echo "Usage:"

@@ -1,9 +1,9 @@
 #include "demod.h"
 #include "dsp.h"
 
-void demodulate_fm(struct channel_pipeline *pipeline,
-                   const struct iq_buffer *input,
-                   struct real_buffer *output)
+void demodulate_fm(
+    struct channel_pipeline *pipeline, const struct iq_buffer *input, struct real_buffer *output
+)
 {
     if (input->len < 1)
     {
@@ -21,9 +21,9 @@ void demodulate_fm(struct channel_pipeline *pipeline,
     output->len = input->len;
 }
 
-void demodulate_am(struct channel_pipeline *pipeline,
-                   const struct iq_buffer *input,
-                   struct real_buffer *output)
+void demodulate_am(
+    struct channel_pipeline *pipeline, const struct iq_buffer *input, struct real_buffer *output
+)
 {
     const float complex *samples = input->samples;
     float *out = output->samples;
@@ -34,9 +34,9 @@ void demodulate_am(struct channel_pipeline *pipeline,
     output->len = input->len;
 }
 
-void demodulate_usb(struct channel_pipeline *pipeline,
-                    const struct iq_buffer *input,
-                    struct real_buffer *output)
+void demodulate_usb(
+    struct channel_pipeline *pipeline, const struct iq_buffer *input, struct real_buffer *output
+)
 {
     const float complex *samples = input->samples;
     float *out = output->samples;
@@ -47,9 +47,9 @@ void demodulate_usb(struct channel_pipeline *pipeline,
     output->len = input->len;
 }
 
-void demodulate_lsb(struct channel_pipeline *pipeline,
-                    const struct iq_buffer *input,
-                    struct real_buffer *output)
+void demodulate_lsb(
+    struct channel_pipeline *pipeline, const struct iq_buffer *input, struct real_buffer *output
+)
 {
     const float complex *samples = input->samples;
     float *out = output->samples;
@@ -60,9 +60,9 @@ void demodulate_lsb(struct channel_pipeline *pipeline,
     output->len = input->len;
 }
 
-void demodulate_raw(struct channel_pipeline *pipeline,
-                    const struct iq_buffer *input,
-                    struct real_buffer *output)
+void demodulate_raw(
+    struct channel_pipeline *pipeline, const struct iq_buffer *input, struct real_buffer *output
+)
 {
     (void)pipeline;
 

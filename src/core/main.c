@@ -79,8 +79,7 @@ static demodulate_fn mode_demod_for(enum demod_mode mode)
  * frequency. Multi-channel: tune to the midpoint; capture rate must
  * cover full span. File input (-I): rate and center come from the
  * recording itself. */
-static int plan_capture(const options_t *opts, int file_input,
-                        int *downsample, int *rate_channel)
+static int plan_capture(const options_t *opts, int file_input, int *downsample, int *rate_channel)
 {
     int rate_in = (int)opts->rate_in;
     uint64_t width;
@@ -100,11 +99,14 @@ static int plan_capture(const options_t *opts, int file_input,
             int64_t offset = (int64_t)opts->channels[i].freq - (int64_t)device.freq;
             if (offset < -limit || offset > limit)
             {
-                fprintf(stderr,
-                        "ERROR: channel %.3f MHz falls outside the IQ file span "
-                        "(%.3f MHz +/-%.0f kHz).\n",
-                        opts->channels[i].freq / 1e6, device.freq / 1e6,
-                        (float)device.rate / 2000.0f);
+                fprintf(
+                    stderr,
+                    "ERROR: channel %.3f MHz falls outside the IQ file span "
+                    "(%.3f MHz +/-%.0f kHz).\n",
+                    opts->channels[i].freq / 1e6,
+                    device.freq / 1e6,
+                    (float)device.rate / 2000.0f
+                );
                 return -1;
             }
         }
@@ -209,9 +211,7 @@ static int setup_pipelines(const options_t *opts, int rate_channel, int downsamp
         else /* OUTPUT_FILE */
         {
             /* stdout is only valid in single-channel mode (already validated above) */
-            outputs[i].file = (strcmp(ch->filename, "-") == 0)
-                                  ? stdout
-                                  : fopen(ch->filename, "wb");
+            outputs[i].file = (strcmp(ch->filename, "-") == 0) ? stdout : fopen(ch->filename, "wb");
             if (!outputs[i].file)
             {
                 fprintf(stderr, "Failed to open %s\n", ch->filename);
@@ -247,8 +247,13 @@ static int setup_pipelines(const options_t *opts, int rate_channel, int downsamp
 static void bringup_file_input(const options_t *opts)
 {
     (void)opts;
-    fprintf(stderr, "IQ file input: %s @ %u Hz, center %.3f MHz\n",
-            device.input_path, device.rate, device.freq / 1e6);
+    fprintf(
+        stderr,
+        "IQ file input: %s @ %u Hz, center %.3f MHz\n",
+        device.input_path,
+        device.rate,
+        device.freq / 1e6
+    );
 }
 
 static int bringup_device(const options_t *opts, int record, int downsample)
@@ -288,22 +293,23 @@ static int bringup_device(const options_t *opts, int record, int downsample)
     /* Open the recording before streaming starts */
     if (record)
     {
-        strncpy(device.record_path, opts->record_file,
-                sizeof(device.record_path) - 1);
+        strncpy(device.record_path, opts->record_file, sizeof(device.record_path) - 1);
         device.record_path[sizeof(device.record_path) - 1] = '\0';
         device.record_file = fopen(device.record_path, "wb");
         if (!device.record_file)
         {
-            fprintf(stderr, "Failed to open %s for IQ recording\n",
-                    device.record_path);
+            fprintf(stderr, "Failed to open %s for IQ recording\n", device.record_path);
             device_close();
             return -1;
         }
-        fprintf(stderr,
-                "Recording baseband to %s @ %u Hz, center %.3f MHz\n",
-                device.record_path, device.rate, device.freq / 1e6);
-        fprintf(stderr, "Replay with: -I %s:%u:%u\n",
-                device.record_path, device.rate, device.freq);
+        fprintf(
+            stderr,
+            "Recording baseband to %s @ %u Hz, center %.3f MHz\n",
+            device.record_path,
+            device.rate,
+            device.freq / 1e6
+        );
+        fprintf(stderr, "Replay with: -I %s:%u:%u\n", device.record_path, device.rate, device.freq);
     }
 
     r = device_apply_settings();
@@ -326,8 +332,9 @@ static void supervise(const options_t *opts, int file_input)
         pthread_create(&outputs[i].thread, NULL, output_thread_fn, &outputs[i]);
     for (int i = 0; i < opts->channel_count; i++)
         pthread_create(&demods[i].thread, NULL, demod_thread_fn, &demods[i]);
-    pthread_create(&device.thread, NULL,
-                   file_input ? file_input_thread_fn : device_thread_fn, &device);
+    pthread_create(
+        &device.thread, NULL, file_input ? file_input_thread_fn : device_thread_fn, &device
+    );
 
     clock_gettime(CLOCK_MONOTONIC, &t_start);
 

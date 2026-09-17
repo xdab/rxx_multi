@@ -36,8 +36,7 @@ static void record_chunk(struct device_state *s, const struct iq_buffer *slot)
 
     for (i = 0; i < slot->len; i++)
         rec[i] = slot->samples[i] * (1.0f / 128.0f);
-    if (fwrite(rec, sizeof(rec[0]), (size_t)slot->len,
-               s->record_file) != (size_t)slot->len)
+    if (fwrite(rec, sizeof(rec[0]), (size_t)slot->len, s->record_file) != (size_t)slot->len)
     {
         fprintf(stderr, "IQ recording write failed, stopping recording\n");
         fclose(s->record_file);
@@ -124,10 +123,14 @@ static void deliver_buf(struct device_state *s, struct iq_buffer *slot)
 /* Drop the first ~300 ms after Init: DC-offset calibration transient */
 #define STARTUP_DROP_SAMPLES 600000
 
-static void sdrplay_stream_cb(short *xi, short *xq,
-                              sdrplay_api_StreamCbParamsT *params,
-                              unsigned int numSamples, unsigned int reset,
-                              void *cbContext)
+static void sdrplay_stream_cb(
+    short *xi,
+    short *xq,
+    sdrplay_api_StreamCbParamsT *params,
+    unsigned int numSamples,
+    unsigned int reset,
+    void *cbContext
+)
 {
     struct device_state *s = &device;
     static unsigned int buf_pending;
@@ -197,29 +200,41 @@ static void sdrplay_stream_cb(short *xi, short *xq,
     }
 }
 
-static void sdrplay_event_cb(sdrplay_api_EventT eventId,
-                             sdrplay_api_TunerSelectT tuner,
-                             sdrplay_api_EventParamsT *params, void *cbContext)
+static void sdrplay_event_cb(
+    sdrplay_api_EventT eventId,
+    sdrplay_api_TunerSelectT tuner,
+    sdrplay_api_EventParamsT *params,
+    void *cbContext
+)
 {
     (void)cbContext;
 
     switch (eventId)
     {
     case sdrplay_api_GainChange:
-        fprintf(stderr, "gain: %.2f dB (gRdB %u, LNA %u)\n",
-                params->gainParams.currGain, params->gainParams.gRdB,
-                params->gainParams.lnaGRdB);
+        fprintf(
+            stderr,
+            "gain: %.2f dB (gRdB %u, LNA %u)\n",
+            params->gainParams.currGain,
+            params->gainParams.gRdB,
+            params->gainParams.lnaGRdB
+        );
         break;
     case sdrplay_api_PowerOverloadChange:
-        fprintf(stderr, "ADC overload %s\n",
-                params->powerOverloadParams.powerOverloadChangeType ==
-                        sdrplay_api_Overload_Detected
-                    ? "detected"
-                    : "corrected");
+        fprintf(
+            stderr,
+            "ADC overload %s\n",
+            params->powerOverloadParams.powerOverloadChangeType == sdrplay_api_Overload_Detected
+                ? "detected"
+                : "corrected"
+        );
         /* Acknowledge so the API keeps reporting */
-        sdrplay_api_Update(device_handle()->dev, tuner,
-                           sdrplay_api_Update_Ctrl_OverloadMsgAck,
-                           sdrplay_api_Update_Ext1_None);
+        sdrplay_api_Update(
+            device_handle()->dev,
+            tuner,
+            sdrplay_api_Update_Ctrl_OverloadMsgAck,
+            sdrplay_api_Update_Ext1_None
+        );
         break;
     case sdrplay_api_DeviceRemoved:
         fprintf(stderr, "Device removed (unplugged), exiting...\n");

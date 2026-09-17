@@ -56,9 +56,12 @@ static int device_ensure_open(void)
     err = sdrplay_api_Open();
     if (err != sdrplay_api_Success)
     {
-        fprintf(stderr, "sdrplay_api_Open failed: %s\n"
-                        "(is the sdrplay_apiService daemon running?)\n",
-                sdrplay_api_GetErrorString(err));
+        fprintf(
+            stderr,
+            "sdrplay_api_Open failed: %s\n"
+            "(is the sdrplay_apiService daemon running?)\n",
+            sdrplay_api_GetErrorString(err)
+        );
         return -1;
     }
     api_open = 1;
@@ -78,16 +81,14 @@ static int device_refresh_list(void)
     err = sdrplay_api_LockDeviceApi();
     if (err != sdrplay_api_Success)
     {
-        fprintf(stderr, "sdrplay_api_LockDeviceApi failed: %s\n",
-                sdrplay_api_GetErrorString(err));
+        fprintf(stderr, "sdrplay_api_LockDeviceApi failed: %s\n", sdrplay_api_GetErrorString(err));
         return -1;
     }
 
     err = sdrplay_api_GetDevices(devices, &num_devices, SDRPLAY_MAX_DEVICES);
     if (err != sdrplay_api_Success)
     {
-        fprintf(stderr, "sdrplay_api_GetDevices failed: %s\n",
-                sdrplay_api_GetErrorString(err));
+        fprintf(stderr, "sdrplay_api_GetDevices failed: %s\n", sdrplay_api_GetErrorString(err));
         sdrplay_api_UnlockDeviceApi();
         return -1;
     }
@@ -172,9 +173,13 @@ int verbose_set_sample_rate(uint32_t samp_rate)
 {
     if (samp_rate < MIN_CAPTURE_RATE || samp_rate > MAX_CAPTURE_RATE)
     {
-        fprintf(stderr,
-                "ERROR: sample rate %u Hz outside RSP range %d-%d Hz.\n",
-                samp_rate, MIN_CAPTURE_RATE, MAX_CAPTURE_RATE);
+        fprintf(
+            stderr,
+            "ERROR: sample rate %u Hz outside RSP range %d-%d Hz.\n",
+            samp_rate,
+            MIN_CAPTURE_RATE,
+            MAX_CAPTURE_RATE
+        );
         return -1;
     }
     device.rate = samp_rate;
@@ -215,14 +220,12 @@ int device_open(int dev_index)
         return -1;
     }
 
-    fprintf(stderr, "device: %s (hwVer %u)\n", devices[dev_index].SerNo,
-            devices[dev_index].hwVer);
+    fprintf(stderr, "device: %s (hwVer %u)\n", devices[dev_index].SerNo, devices[dev_index].hwVer);
 
     err = sdrplay_api_SelectDevice(&devices[dev_index]);
     if (err != sdrplay_api_Success)
     {
-        fprintf(stderr, "sdrplay_api_SelectDevice failed: %s\n",
-                sdrplay_api_GetErrorString(err));
+        fprintf(stderr, "sdrplay_api_SelectDevice failed: %s\n", sdrplay_api_GetErrorString(err));
         return -1;
     }
     device_selected = 1;
@@ -232,8 +235,8 @@ int device_open(int dev_index)
     api_locked = 0;
 
     err = sdrplay_api_GetDeviceParams(devices[dev_index].dev, &dev_params);
-    if (err != sdrplay_api_Success || dev_params == NULL ||
-        dev_params->devParams == NULL || dev_params->rxChannelA == NULL)
+    if (err != sdrplay_api_Success || dev_params == NULL || dev_params->devParams == NULL ||
+        dev_params->rxChannelA == NULL)
     {
         fprintf(stderr, "sdrplay_api_GetDeviceParams failed\n");
         return -1;
@@ -320,22 +323,22 @@ int device_stream_start(sdrplay_api_CallbackFnsT *cb_fns)
     err = sdrplay_api_Init(devices[device.dev_index].dev, cb_fns, NULL);
     if (err != sdrplay_api_Success)
     {
-        fprintf(stderr, "sdrplay_api_Init failed: %s\n",
-                sdrplay_api_GetErrorString(err));
+        fprintf(stderr, "sdrplay_api_Init failed: %s\n", sdrplay_api_GetErrorString(err));
         return -1;
     }
 
-    fprintf(stderr, "tuned %.0f Hz @ %.2f MS/s\n", (double)device.freq,
-            device.rate / 1e6);
+    fprintf(stderr, "tuned %.0f Hz @ %.2f MS/s\n", (double)device.freq, device.rate / 1e6);
     return 0;
 }
 
 void device_print_options(void)
 {
-    fprintf(stderr,
-            "\t[-g RSP IF gain reduction, 0-59 dB (default: auto)]\n"
-            "\t[-L RSP LNA state 0-2 on RSP1, 2 = max attenuation (default: auto)]\n"
-            "\t    giving either -g or -L selects manual gain; no flags = API AGC\n");
+    fprintf(
+        stderr,
+        "\t[-g RSP IF gain reduction, 0-59 dB (default: auto)]\n"
+        "\t[-L RSP LNA state 0-2 on RSP1, 2 = max attenuation (default: auto)]\n"
+        "\t    giving either -g or -L selects manual gain; no flags = API AGC\n"
+    );
 }
 
 int device_parse_option(int opt, const char *optarg, options_t *opts)
@@ -370,12 +373,10 @@ int device_parse_option(int opt, const char *optarg, options_t *opts)
         fprintf(stderr, "WARNING: -T has no RSP equivalent yet; ignored.\n");
         return 0;
     case 'p':
-        fprintf(stderr,
-                "WARNING: -p has no RSP equivalent (API handles correction); ignored.\n");
+        fprintf(stderr, "WARNING: -p has no RSP equivalent (API handles correction); ignored.\n");
         return 0;
     case 'E':
-        fprintf(stderr,
-                "WARNING: -E %s has no RSP equivalent; ignored.\n", optarg);
+        fprintf(stderr, "WARNING: -E %s has no RSP equivalent; ignored.\n", optarg);
         return 0;
     default:
         return 1;
@@ -402,8 +403,9 @@ void device_apply_options(options_t *opts, int file_input)
                 device.gain_rdb = DEFAULT_GRDB;
             if (device.lna_state < 0)
                 device.lna_state = DEFAULT_LNA_STATE;
-            fprintf(stderr, "Manual gain: gRdB %d dB, LNA state %d\n",
-                    device.gain_rdb, device.lna_state);
+            fprintf(
+                stderr, "Manual gain: gRdB %d dB, LNA state %d\n", device.gain_rdb, device.lna_state
+            );
         }
     }
     else
@@ -412,8 +414,7 @@ void device_apply_options(options_t *opts, int file_input)
     }
 }
 
-int device_plan_capture(int file_input, uint32_t rate_in, uint64_t width,
-                        struct capture_plan *plan)
+int device_plan_capture(int file_input, uint32_t rate_in, uint64_t width, struct capture_plan *plan)
 {
     if (file_input)
     {
@@ -422,8 +423,7 @@ int device_plan_capture(int file_input, uint32_t rate_in, uint64_t width,
             plan->downsample = 1;
         if (plan->downsample > 256)
         {
-            fprintf(stderr, "ERROR: required downsample factor %d too large.\n",
-                    plan->downsample);
+            fprintf(stderr, "ERROR: required downsample factor %d too large.\n", plan->downsample);
             return -1;
         }
         return 0;
@@ -431,9 +431,12 @@ int device_plan_capture(int file_input, uint32_t rate_in, uint64_t width,
 
     if (width > MAX_CAPTURE_RATE)
     {
-        fprintf(stderr,
-                "ERROR: channel span + guard (%.1f kHz) exceeds max capture (%.0f kHz).\n",
-                (float)width / 1000.0, (float)MAX_CAPTURE_RATE / 1000.0);
+        fprintf(
+            stderr,
+            "ERROR: channel span + guard (%.1f kHz) exceeds max capture (%.0f kHz).\n",
+            (float)width / 1000.0,
+            (float)MAX_CAPTURE_RATE / 1000.0
+        );
         return -1;
     }
 
@@ -446,17 +449,19 @@ int device_plan_capture(int file_input, uint32_t rate_in, uint64_t width,
     else
         plan->rate = MAX_CAPTURE_RATE;
     if (plan->rate < width)
-        fprintf(stderr,
-                "WARNING: capture %u Hz snapped up from %.1f kHz request.\n",
-                plan->rate, (float)width / 1000.0);
+        fprintf(
+            stderr,
+            "WARNING: capture %u Hz snapped up from %.1f kHz request.\n",
+            plan->rate,
+            (float)width / 1000.0
+        );
 
     plan->downsample = (int)(plan->rate / rate_in);
     if (plan->downsample < 1)
         plan->downsample = 1;
     if (plan->downsample > 256)
     {
-        fprintf(stderr, "ERROR: required downsample factor %d too large.\n",
-                plan->downsample);
+        fprintf(stderr, "ERROR: required downsample factor %d too large.\n", plan->downsample);
         return -1;
     }
     return 0;

@@ -41,9 +41,14 @@ int udp_write(struct output_state *s, int16_t *samples, int count)
         return -1;
 
     /* Send raw PCM data (16-bit samples, MSG_NOSIGNAL prevents SIGPIPE) */
-    ssize_t sent = sendto(s->net.udp.sock, samples, count * 2, MSG_NOSIGNAL,
-                          (struct sockaddr *)&s->net.udp.dest,
-                          sizeof(s->net.udp.dest));
+    ssize_t sent = sendto(
+        s->net.udp.sock,
+        samples,
+        count * 2,
+        MSG_NOSIGNAL,
+        (struct sockaddr *)&s->net.udp.dest,
+        sizeof(s->net.udp.dest)
+    );
 
     if (sent < 0)
     {

@@ -28,8 +28,9 @@ void device_apply_options(options_t *opts, int file_input);
 
 /* Turn the requested capture width into rate + downsample for this
  * backend (rate snapping, range checks). Returns -1 on error. */
-int device_plan_capture(int file_input, uint32_t rate_in, uint64_t width,
-                        struct capture_plan *plan);
+int device_plan_capture(
+    int file_input, uint32_t rate_in, uint64_t width, struct capture_plan *plan
+);
 
 /* Device selection (index or serial substring), returns index or -1 */
 int verbose_device_search(char *s);

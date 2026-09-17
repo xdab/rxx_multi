@@ -3,4 +3,10 @@ IndentWidth: 4
 BreakBeforeBraces: Allman
 AllowShortIfStatementsOnASingleLine: false
 IndentCaseLabels: false
-ColumnLimit: 0
+ColumnLimit: 100
+# Wrapped call/declaration parameters indent one level, not to the open paren
+AlignAfterOpenBracket: BlockIndent
+BinPackParameters: false
+BinPackArguments: false
+# Leave prose (and long string literals) as written
+ReflowComments: false

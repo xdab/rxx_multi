@@ -28,9 +28,9 @@ void pipeline_cleanup(struct channel_pipeline *pipeline)
         iirfilt_rrrf_destroy(pipeline->dc_block_filter);
 }
 
-int pipeline_process(struct channel_pipeline *pipeline,
-                     const struct iq_buffer *input,
-                     struct real_buffer *output)
+int pipeline_process(
+    struct channel_pipeline *pipeline, const struct iq_buffer *input, struct real_buffer *output
+)
 {
     output->len = 0;
     if (pipeline == NULL || input == NULL || output == NULL || pipeline->demodulate == NULL)

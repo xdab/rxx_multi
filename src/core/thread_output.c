@@ -10,11 +10,9 @@ void *output_thread_fn(void *arg)
     while (1)
     {
         pthread_mutex_lock(&s->ready_m);
-        while (!s->data_ready &&
-               !(do_exit && s->seq_written == s->seq_packed))
+        while (!s->data_ready && !(do_exit && s->seq_written == s->seq_packed))
             pthread_cond_wait(&s->ready, &s->ready_m);
-        if (do_exit && !s->data_ready &&
-            s->seq_written == s->seq_packed)
+        if (do_exit && !s->data_ready && s->seq_written == s->seq_packed)
         {
             pthread_mutex_unlock(&s->ready_m);
             break;

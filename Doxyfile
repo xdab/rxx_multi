@@ -1,0 +1,21 @@
+# rxx_multi API documentation — run via `make doc`
+
+PROJECT_NAME           = "rxx_multi"
+PROJECT_BRIEF          = "Multi-channel narrowband SDR receiver/demodulator"
+
+# Sources only; no test/tool scripts
+INPUT                  = include src
+RECURSIVE              = YES
+FILE_PATTERNS          = *.c *.h
+EXCLUDE_PATTERNS       = */obj/*
+
+# Document everything, even entities without a doc comment
+EXTRACT_ALL            = YES
+WARN_IF_UNDOCUMENTED   = NO
+
+# HTML only
+GENERATE_LATEX         = NO
+OUTPUT_DIRECTORY       = docs/doxygen
+HTML_OUTPUT            = html
+
+QUIET                  = YES

@@ -35,3 +35,6 @@ plot_*.py
 # Performance profiling outputs
 callgrind.out*
 massif.out*
+
+# Generated API docs
+docs/doxygen/

@@ -21,8 +21,7 @@ static void record_chunk(struct device_state *s, const struct iq_buffer *slot)
 
     for (i = 0; i < slot->len; i++)
         rec[i] = slot->samples[i] * (1.0f / 128.0f);
-    if (fwrite(rec, sizeof(rec[0]), (size_t)slot->len,
-               s->record_file) != (size_t)slot->len)
+    if (fwrite(rec, sizeof(rec[0]), (size_t)slot->len, s->record_file) != (size_t)slot->len)
     {
         fprintf(stderr, "IQ recording write failed, stopping recording\n");
         fclose(s->record_file);

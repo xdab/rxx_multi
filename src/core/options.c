@@ -214,53 +214,57 @@ static const char *get_value_at(const char *str, int index)
 
 void options_usage(void)
 {
-    fprintf(stderr,
-            APP_NAME ", a simple narrow band demodulator\n"
-            "\n"
-            "Use:\t" APP_NAME " -f freq [-options] [filename]\n"
-            "\t-f frequency_to_tune_to [Hz]\n"
-            "\t    supports suffixes: k,M,G\n"
-            "\t    examples: -f 145500000 \n"
-            "\t           or -f 145500k \n"
-            "\t           or -f 145M,145.5,146.52M (multi-channel operation)\n"
-            "\t[-M modulation (default: fm)]\n"
-            "\t    fm, wbfm, raw, am, usb, lsb\n"
-            "\t    wbfm == -M fm -s 170k -E deemp\n"
-            "\t    raw mode outputs 2x16 bit IQ pairs\n"
-            "\t[-s channel_sample_rate (default: 12k)]\n"
-            "\t[-r output_sample_rate (default: 48k)]\n"
-            "\t[-d device_index or serial (default: 0)]\n");
+    fprintf(
+        stderr,
+        APP_NAME ", a simple narrow band demodulator\n"
+                 "\n"
+                 "Use:\t" APP_NAME " -f freq [-options] [filename]\n"
+                 "\t-f frequency_to_tune_to [Hz]\n"
+                 "\t    supports suffixes: k,M,G\n"
+                 "\t    examples: -f 145500000 \n"
+                 "\t           or -f 145500k \n"
+                 "\t           or -f 145M,145.5,146.52M (multi-channel operation)\n"
+                 "\t[-M modulation (default: fm)]\n"
+                 "\t    fm, wbfm, raw, am, usb, lsb\n"
+                 "\t    wbfm == -M fm -s 170k -E deemp\n"
+                 "\t    raw mode outputs 2x16 bit IQ pairs\n"
+                 "\t[-s channel_sample_rate (default: 12k)]\n"
+                 "\t[-r output_sample_rate (default: 48k)]\n"
+                 "\t[-d device_index or serial (default: 0)]\n"
+    );
     device_print_options();
-    fprintf(stderr,
-            "\t[-E enable_option (default: none)]\n"
-            "\t    use multiple -E to enable multiple options\n"
-            "\t    dc:      enable dc blocking filter\n"
-            "\t    deemp:   enable de-emphasis filter\n"
-            "\t[-O output_mode]\n"
-            "\t    tcp:PORT    - TCP server on PORT (e.g., -O tcp:8000)\n"
-            "\t    udp:HOST:PORT - UDP to HOST:PORT (e.g., -O udp:127.0.0.1:5000)\n"
-            "\t    FILENAME    - raw audio to disk (e.g., -O ch1.raw,\n"
-            "\t                  may not contain commas)\n"
-            "\t    (if not specified, output to stdout)\n"
-            "\t[-I FILE:RATE:CENTER - raw IQ file input (test mode, no device)]\n"
-            "\t    FILE    interleaved float32 I/Q (CF32, e.g. SDR++ baseband)\n"
-            "\t    RATE    capture rate of the recording (e.g. 2M)\n"
-            "\t    CENTER  center frequency of the recording (e.g. 102.5M)\n"
-            "\t[-R FILE - record raw baseband IQ to FILE (CF32, replay with -I)]\n"
-            "\t    one file for the whole capture span, all channels included;\n"
-            "\t    rate/center are printed at startup as the exact -I invocation\n"
-            "\n"
-            "Experimental options:\n"
-            "\t[-x seconds - exit gracefully after SECONDS of running]\n"
-            "\n"
-            "Produces signed 16 bit ints, use Sox or aplay to hear them.\n"
-            "\t" APP_NAME " ... | play -t raw -r 24k -es -b 16 -c 1 -V1 -\n"
-            "\t          ... | aplay -r 24k -f S16_LE -t raw -c 1\n"
-            "\t" APP_NAME " -f 101.0M -O tcp:8000\n"
-            "\t          ... | nc localhost 8000 | aplay -r 24k -f S16_LE -t raw -c 1\n"
-            "\t" APP_NAME " -f 101.0M -O udp:127.0.0.1:5000\n"
-            "\t          ... | nc -lu 127.0.0.1 5000 | aplay -r 24k -f S16_LE -t raw -c 1\n"
-            "\n");
+    fprintf(
+        stderr,
+        "\t[-E enable_option (default: none)]\n"
+        "\t    use multiple -E to enable multiple options\n"
+        "\t    dc:      enable dc blocking filter\n"
+        "\t    deemp:   enable de-emphasis filter\n"
+        "\t[-O output_mode]\n"
+        "\t    tcp:PORT    - TCP server on PORT (e.g., -O tcp:8000)\n"
+        "\t    udp:HOST:PORT - UDP to HOST:PORT (e.g., -O udp:127.0.0.1:5000)\n"
+        "\t    FILENAME    - raw audio to disk (e.g., -O ch1.raw,\n"
+        "\t                  may not contain commas)\n"
+        "\t    (if not specified, output to stdout)\n"
+        "\t[-I FILE:RATE:CENTER - raw IQ file input (test mode, no device)]\n"
+        "\t    FILE    interleaved float32 I/Q (CF32, e.g. SDR++ baseband)\n"
+        "\t    RATE    capture rate of the recording (e.g. 2M)\n"
+        "\t    CENTER  center frequency of the recording (e.g. 102.5M)\n"
+        "\t[-R FILE - record raw baseband IQ to FILE (CF32, replay with -I)]\n"
+        "\t    one file for the whole capture span, all channels included;\n"
+        "\t    rate/center are printed at startup as the exact -I invocation\n"
+        "\n"
+        "Experimental options:\n"
+        "\t[-x seconds - exit gracefully after SECONDS of running]\n"
+        "\n"
+        "Produces signed 16 bit ints, use Sox or aplay to hear them.\n"
+        "\t" APP_NAME " ... | play -t raw -r 24k -es -b 16 -c 1 -V1 -\n"
+        "\t          ... | aplay -r 24k -f S16_LE -t raw -c 1\n"
+        "\t" APP_NAME " -f 101.0M -O tcp:8000\n"
+        "\t          ... | nc localhost 8000 | aplay -r 24k -f S16_LE -t raw -c 1\n"
+        "\t" APP_NAME " -f 101.0M -O udp:127.0.0.1:5000\n"
+        "\t          ... | nc -lu 127.0.0.1 5000 | aplay -r 24k -f S16_LE -t raw -c 1\n"
+        "\n"
+    );
     exit(1);
 }
 
@@ -422,10 +426,17 @@ int options_parse(int argc, char **argv, options_t *opts)
                 int val_count = count_values(optarg);
                 if (val_count != opts->channel_count)
                 {
-                    fprintf(stderr, "ERROR: -M has %d values but %d frequencies specified\n",
-                            val_count, opts->channel_count);
-                    fprintf(stderr, "       Use 1 value (applies to all) or %d values\n",
-                            opts->channel_count);
+                    fprintf(
+                        stderr,
+                        "ERROR: -M has %d values but %d frequencies specified\n",
+                        val_count,
+                        opts->channel_count
+                    );
+                    fprintf(
+                        stderr,
+                        "       Use 1 value (applies to all) or %d values\n",
+                        opts->channel_count
+                    );
                     return -1;
                 }
                 /* Apply per-channel */
@@ -456,18 +467,28 @@ int options_parse(int argc, char **argv, options_t *opts)
                 /* Require comma-separated values (one per channel) */
                 if (!strchr(optarg, ','))
                 {
-                    fprintf(stderr, "ERROR: -O requires one output per channel in multi-channel mode\n");
-                    fprintf(stderr, "       Use -O tcp:8001,tcp:8002,... for %d channels\n",
-                            opts->channel_count);
+                    fprintf(
+                        stderr, "ERROR: -O requires one output per channel in multi-channel mode\n"
+                    );
+                    fprintf(
+                        stderr,
+                        "       Use -O tcp:8001,tcp:8002,... for %d channels\n",
+                        opts->channel_count
+                    );
                     return -1;
                 }
                 int val_count = count_values(optarg);
                 if (val_count != opts->channel_count)
                 {
-                    fprintf(stderr, "ERROR: -O has %d values but %d frequencies specified\n",
-                            val_count, opts->channel_count);
-                    fprintf(stderr, "       Must specify exactly %d outputs\n",
-                            opts->channel_count);
+                    fprintf(
+                        stderr,
+                        "ERROR: -O has %d values but %d frequencies specified\n",
+                        val_count,
+                        opts->channel_count
+                    );
+                    fprintf(
+                        stderr, "       Must specify exactly %d outputs\n", opts->channel_count
+                    );
                     return -1;
                 }
                 /* Apply per-channel */
