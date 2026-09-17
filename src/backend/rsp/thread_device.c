@@ -129,8 +129,7 @@ static void sdrplay_stream_cb(
     sdrplay_api_StreamCbParamsT *params,
     unsigned int numSamples,
     unsigned int reset,
-    void *cbContext
-)
+    void *cbContext)
 {
     struct device_state *s = &device;
     static unsigned int buf_pending;
@@ -204,8 +203,7 @@ static void sdrplay_event_cb(
     sdrplay_api_EventT eventId,
     sdrplay_api_TunerSelectT tuner,
     sdrplay_api_EventParamsT *params,
-    void *cbContext
-)
+    void *cbContext)
 {
     (void)cbContext;
 
@@ -217,8 +215,7 @@ static void sdrplay_event_cb(
             "gain: %.2f dB (gRdB %u, LNA %u)\n",
             params->gainParams.currGain,
             params->gainParams.gRdB,
-            params->gainParams.lnaGRdB
-        );
+            params->gainParams.lnaGRdB);
         break;
     case sdrplay_api_PowerOverloadChange:
         fprintf(
@@ -226,15 +223,13 @@ static void sdrplay_event_cb(
             "ADC overload %s\n",
             params->powerOverloadParams.powerOverloadChangeType == sdrplay_api_Overload_Detected
                 ? "detected"
-                : "corrected"
-        );
+                : "corrected");
         /* Acknowledge so the API keeps reporting */
         sdrplay_api_Update(
             device_handle()->dev,
             tuner,
             sdrplay_api_Update_Ctrl_OverloadMsgAck,
-            sdrplay_api_Update_Ext1_None
-        );
+            sdrplay_api_Update_Ext1_None);
         break;
     case sdrplay_api_DeviceRemoved:
         fprintf(stderr, "Device removed (unplugged), exiting...\n");

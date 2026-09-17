@@ -230,8 +230,7 @@ void options_usage(void)
                  "\t    raw mode outputs 2x16 bit IQ pairs\n"
                  "\t[-s channel_sample_rate (default: 12k)]\n"
                  "\t[-r output_sample_rate (default: 48k)]\n"
-                 "\t[-d device_index or serial (default: 0)]\n"
-    );
+                 "\t[-d device_index or serial (default: 0)]\n");
     device_print_options();
     fprintf(
         stderr,
@@ -263,8 +262,7 @@ void options_usage(void)
         "\t          ... | nc localhost 8000 | aplay -r 24k -f S16_LE -t raw -c 1\n"
         "\t" APP_NAME " -f 101.0M -O udp:127.0.0.1:5000\n"
         "\t          ... | nc -lu 127.0.0.1 5000 | aplay -r 24k -f S16_LE -t raw -c 1\n"
-        "\n"
-    );
+        "\n");
     exit(1);
 }
 
@@ -430,13 +428,11 @@ int options_parse(int argc, char **argv, options_t *opts)
                         stderr,
                         "ERROR: -M has %d values but %d frequencies specified\n",
                         val_count,
-                        opts->channel_count
-                    );
+                        opts->channel_count);
                     fprintf(
                         stderr,
                         "       Use 1 value (applies to all) or %d values\n",
-                        opts->channel_count
-                    );
+                        opts->channel_count);
                     return -1;
                 }
                 /* Apply per-channel */
@@ -468,13 +464,12 @@ int options_parse(int argc, char **argv, options_t *opts)
                 if (!strchr(optarg, ','))
                 {
                     fprintf(
-                        stderr, "ERROR: -O requires one output per channel in multi-channel mode\n"
-                    );
+                        stderr,
+                        "ERROR: -O requires one output per channel in multi-channel mode\n");
                     fprintf(
                         stderr,
                         "       Use -O tcp:8001,tcp:8002,... for %d channels\n",
-                        opts->channel_count
-                    );
+                        opts->channel_count);
                     return -1;
                 }
                 int val_count = count_values(optarg);
@@ -484,11 +479,9 @@ int options_parse(int argc, char **argv, options_t *opts)
                         stderr,
                         "ERROR: -O has %d values but %d frequencies specified\n",
                         val_count,
-                        opts->channel_count
-                    );
+                        opts->channel_count);
                     fprintf(
-                        stderr, "       Must specify exactly %d outputs\n", opts->channel_count
-                    );
+                        stderr, "       Must specify exactly %d outputs\n", opts->channel_count);
                     return -1;
                 }
                 /* Apply per-channel */

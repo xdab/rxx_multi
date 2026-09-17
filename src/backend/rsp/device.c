@@ -60,8 +60,7 @@ static int device_ensure_open(void)
             stderr,
             "sdrplay_api_Open failed: %s\n"
             "(is the sdrplay_apiService daemon running?)\n",
-            sdrplay_api_GetErrorString(err)
-        );
+            sdrplay_api_GetErrorString(err));
         return -1;
     }
     api_open = 1;
@@ -178,8 +177,7 @@ int verbose_set_sample_rate(uint32_t samp_rate)
             "ERROR: sample rate %u Hz outside RSP range %d-%d Hz.\n",
             samp_rate,
             MIN_CAPTURE_RATE,
-            MAX_CAPTURE_RATE
-        );
+            MAX_CAPTURE_RATE);
         return -1;
     }
     device.rate = samp_rate;
@@ -337,8 +335,7 @@ void device_print_options(void)
         stderr,
         "\t[-g RSP IF gain reduction, 0-59 dB (default: auto)]\n"
         "\t[-L RSP LNA state 0-2 on RSP1, 2 = max attenuation (default: auto)]\n"
-        "\t    giving either -g or -L selects manual gain; no flags = API AGC\n"
-    );
+        "\t    giving either -g or -L selects manual gain; no flags = API AGC\n");
 }
 
 int device_parse_option(int opt, const char *optarg, options_t *opts)
@@ -404,8 +401,10 @@ void device_apply_options(options_t *opts, int file_input)
             if (device.lna_state < 0)
                 device.lna_state = DEFAULT_LNA_STATE;
             fprintf(
-                stderr, "Manual gain: gRdB %d dB, LNA state %d\n", device.gain_rdb, device.lna_state
-            );
+                stderr,
+                "Manual gain: gRdB %d dB, LNA state %d\n",
+                device.gain_rdb,
+                device.lna_state);
         }
     }
     else
@@ -435,8 +434,7 @@ int device_plan_capture(int file_input, uint32_t rate_in, uint64_t width, struct
             stderr,
             "ERROR: channel span + guard (%.1f kHz) exceeds max capture (%.0f kHz).\n",
             (float)width / 1000.0,
-            (float)MAX_CAPTURE_RATE / 1000.0
-        );
+            (float)MAX_CAPTURE_RATE / 1000.0);
         return -1;
     }
 
@@ -453,8 +451,7 @@ int device_plan_capture(int file_input, uint32_t rate_in, uint64_t width, struct
             stderr,
             "WARNING: capture %u Hz snapped up from %.1f kHz request.\n",
             plan->rate,
-            (float)width / 1000.0
-        );
+            (float)width / 1000.0);
 
     plan->downsample = (int)(plan->rate / rate_in);
     if (plan->downsample < 1)

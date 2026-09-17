@@ -4,9 +4,9 @@ BreakBeforeBraces: Allman
 AllowShortIfStatementsOnASingleLine: false
 IndentCaseLabels: false
 ColumnLimit: 100
-# Wrapped call/declaration parameters indent one level, not to the open paren
-AlignAfterOpenBracket: BlockIndent
+AlignAfterOpenBracket: true
+BreakAfterOpenBracketFunction: true
+BreakBeforeCloseBracketFunction: false
 BinPackParameters: false
 BinPackArguments: false
-# Leave prose (and long string literals) as written
 ReflowComments: false

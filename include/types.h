@@ -38,8 +38,7 @@ struct channel_pipeline;
 struct output_state;
 
 typedef void (*demodulate_fn)(
-    struct channel_pipeline *pipeline, const struct iq_buffer *input, struct real_buffer *output
-);
+    struct channel_pipeline *pipeline, const struct iq_buffer *input, struct real_buffer *output);
 
 struct iq_buffer
 {

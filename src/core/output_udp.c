@@ -47,8 +47,7 @@ int udp_write(struct output_state *s, int16_t *samples, int count)
         count * 2,
         MSG_NOSIGNAL,
         (struct sockaddr *)&s->net.udp.dest,
-        sizeof(s->net.udp.dest)
-    );
+        sizeof(s->net.udp.dest));
 
     if (sent < 0)
     {

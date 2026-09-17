@@ -6,7 +6,6 @@
 void pipeline_init(struct channel_pipeline *pipeline);
 void pipeline_cleanup(struct channel_pipeline *pipeline);
 int pipeline_process(
-    struct channel_pipeline *pipeline, const struct iq_buffer *input, struct real_buffer *output
-);
+    struct channel_pipeline *pipeline, const struct iq_buffer *input, struct real_buffer *output);
 
 #endif /* PIPELINE_H */

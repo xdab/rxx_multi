@@ -105,8 +105,7 @@ static int plan_capture(const options_t *opts, int file_input, int *downsample, 
                     "(%.3f MHz +/-%.0f kHz).\n",
                     opts->channels[i].freq / 1e6,
                     device.freq / 1e6,
-                    (float)device.rate / 2000.0f
-                );
+                    (float)device.rate / 2000.0f);
                 return -1;
             }
         }
@@ -252,8 +251,7 @@ static void bringup_file_input(const options_t *opts)
         "IQ file input: %s @ %u Hz, center %.3f MHz\n",
         device.input_path,
         device.rate,
-        device.freq / 1e6
-    );
+        device.freq / 1e6);
 }
 
 static int bringup_device(const options_t *opts, int record, int downsample)
@@ -307,8 +305,7 @@ static int bringup_device(const options_t *opts, int record, int downsample)
             "Recording baseband to %s @ %u Hz, center %.3f MHz\n",
             device.record_path,
             device.rate,
-            device.freq / 1e6
-        );
+            device.freq / 1e6);
         fprintf(stderr, "Replay with: -I %s:%u:%u\n", device.record_path, device.rate, device.freq);
     }
 
@@ -333,8 +330,7 @@ static void supervise(const options_t *opts, int file_input)
     for (int i = 0; i < opts->channel_count; i++)
         pthread_create(&demods[i].thread, NULL, demod_thread_fn, &demods[i]);
     pthread_create(
-        &device.thread, NULL, file_input ? file_input_thread_fn : device_thread_fn, &device
-    );
+        &device.thread, NULL, file_input ? file_input_thread_fn : device_thread_fn, &device);
 
     clock_gettime(CLOCK_MONOTONIC, &t_start);
 

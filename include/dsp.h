@@ -34,8 +34,7 @@ int dsp_shift_frequency(struct channel_pipeline *pipeline, const struct iq_buffe
  * @return 0 on success, -1 on failure.
  */
 int dsp_decimate_channel(
-    struct channel_pipeline *pipeline, const struct iq_buffer *input, struct iq_buffer *output
-);
+    struct channel_pipeline *pipeline, const struct iq_buffer *input, struct iq_buffer *output);
 
 /**
  * @brief Resample the demod-rate chunk to the audio output rate.

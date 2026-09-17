@@ -120,8 +120,7 @@ static inline float complex decim_dot_avx2(
     const float *restrict taps,
     const float *restrict pairs,
     const float complex *restrict x,
-    unsigned int n_taps
-)
+    unsigned int n_taps)
 {
     const float *restrict xf = (const float *)x;
     unsigned int n4 = n_taps / 4;
@@ -132,17 +131,13 @@ static inline float complex decim_dot_avx2(
     for (; j + 4 <= n4; j += 4)
     {
         a0 = _mm256_fmadd_ps(
-            _mm256_loadu_ps(xf + 8 * (j + 0)), _mm256_loadu_ps(pairs + 8 * (j + 0)), a0
-        );
+            _mm256_loadu_ps(xf + 8 * (j + 0)), _mm256_loadu_ps(pairs + 8 * (j + 0)), a0);
         a1 = _mm256_fmadd_ps(
-            _mm256_loadu_ps(xf + 8 * (j + 1)), _mm256_loadu_ps(pairs + 8 * (j + 1)), a1
-        );
+            _mm256_loadu_ps(xf + 8 * (j + 1)), _mm256_loadu_ps(pairs + 8 * (j + 1)), a1);
         a2 = _mm256_fmadd_ps(
-            _mm256_loadu_ps(xf + 8 * (j + 2)), _mm256_loadu_ps(pairs + 8 * (j + 2)), a2
-        );
+            _mm256_loadu_ps(xf + 8 * (j + 2)), _mm256_loadu_ps(pairs + 8 * (j + 2)), a2);
         a3 = _mm256_fmadd_ps(
-            _mm256_loadu_ps(xf + 8 * (j + 3)), _mm256_loadu_ps(pairs + 8 * (j + 3)), a3
-        );
+            _mm256_loadu_ps(xf + 8 * (j + 3)), _mm256_loadu_ps(pairs + 8 * (j + 3)), a3);
     }
     for (; j < n4; j++)
         a0 = _mm256_fmadd_ps(_mm256_loadu_ps(xf + 8 * j), _mm256_loadu_ps(pairs + 8 * j), a0);
@@ -160,8 +155,7 @@ static inline void decim_dot2_avx2(
     const float complex *restrict xb,
     unsigned int n_taps,
     float complex *restrict ra,
-    float complex *restrict rb
-)
+    float complex *restrict rb)
 {
     const float *restrict fa = (const float *)xa;
     const float *restrict fb = (const float *)xb;
@@ -257,8 +251,7 @@ static int decimator_create(struct channel_pipeline *pipeline)
 }
 
 int dsp_decimate_channel(
-    struct channel_pipeline *pipeline, const struct iq_buffer *input, struct iq_buffer *output
-)
+    struct channel_pipeline *pipeline, const struct iq_buffer *input, struct iq_buffer *output)
 {
     if (pipeline == NULL || input == NULL || output == NULL || input->len <= 0)
         return 0;
@@ -321,15 +314,13 @@ int dsp_decimate_channel(
                 input->samples + e + M - tail_len,
                 h_len,
                 &temp_out[n],
-                &temp_out[n + 1]
-            );
+                &temp_out[n + 1]);
         if (n < out_len)
             temp_out[n] = decim_dot_avx2(
                 pipeline->decim_taps,
                 pipeline->decim_taps_pairs,
                 input->samples + e - tail_len,
-                h_len
-            );
+                h_len);
     }
     else
 #endif
@@ -344,20 +335,17 @@ int dsp_decimate_channel(
         memcpy(
             pipeline->decimator_tail,
             input->samples + in_len - tail_len,
-            tail_len * sizeof(pipeline->decimator_tail[0])
-        );
+            tail_len * sizeof(pipeline->decimator_tail[0]));
     else
     {
         memmove(
             pipeline->decimator_tail,
             pipeline->decimator_tail + in_len,
-            (tail_len - in_len) * sizeof(pipeline->decimator_tail[0])
-        );
+            (tail_len - in_len) * sizeof(pipeline->decimator_tail[0]));
         memcpy(
             pipeline->decimator_tail + tail_len - in_len,
             input->samples,
-            in_len * sizeof(pipeline->decimator_tail[0])
-        );
+            in_len * sizeof(pipeline->decimator_tail[0]));
     }
     pipeline->decim_rem = (r + in_len) % M;
 
@@ -404,8 +392,7 @@ int dsp_resample_output(struct channel_pipeline *pipeline, struct real_buffer *b
 
     unsigned int out_len = 0;
     resamp_rrrf_execute_block(
-        pipeline->audio_resampler, buffer->samples, in_len, temp_buf, &out_len
-    );
+        pipeline->audio_resampler, buffer->samples, in_len, temp_buf, &out_len);
 
     unsigned int copy_len = out_len;
     if (copy_len > MAXIMUM_BUF_LENGTH)

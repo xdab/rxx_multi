@@ -59,8 +59,7 @@ static int nearest_gain(int target_gain)
             stderr,
             "ERROR: tuner gains count %d exceeds MAX_TUNER_GAINS (%d)\n",
             count,
-            MAX_TUNER_GAINS
-        );
+            MAX_TUNER_GAINS);
         exit(1);
     }
 
@@ -200,8 +199,7 @@ void device_print_options(void)
         "\t[-T enable bias-T on GPIO PIN 0 (works for rtl-sdr.com v3 dongles)]\n"
         "\t[-g tuner_gain (default: automatic)]\n"
         "\t[-p ppm_error (default: 0)]\n"
-        "\t[-E also: direct/direct2 direct sampling (I/Q)]\n"
-    );
+        "\t[-E also: direct/direct2 direct sampling (I/Q)]\n");
 }
 
 int device_parse_option(int opt, const char *optarg, options_t *opts)
@@ -265,8 +263,7 @@ int device_plan_capture(int file_input, uint32_t rate_in, uint64_t width, struct
             stderr,
             "ERROR: channel span + guard (%.1f kHz) exceeds max capture (%.0f kHz).\n",
             (float)width / 1000.0,
-            (float)RTL_MAX_CAPTURE / 1000.0
-        );
+            (float)RTL_MAX_CAPTURE / 1000.0);
         return -1;
     }
 
@@ -275,8 +272,9 @@ int device_plan_capture(int file_input, uint32_t rate_in, uint64_t width, struct
     if (plan->rate > RTL_RATE_MAX_LOW && plan->rate < RTL_RATE_MIN_HIGH)
     {
         fprintf(
-            stderr, "WARNING: Computed rate %u Hz is in unsupported range (300k-900k). ", plan->rate
-        );
+            stderr,
+            "WARNING: Computed rate %u Hz is in unsupported range (300k-900k). ",
+            plan->rate);
         plan->downsample =
             (int)((RTL_RATE_MIN_HIGH + rate_in - 1) / rate_in); /* ceiling, >=900001 */
         plan->rate = (uint32_t)(plan->downsample * rate_in);
