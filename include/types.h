@@ -1,6 +1,14 @@
 #ifndef TYPES_H
 #define TYPES_H
 
+/**
+ * @file types.h
+ * @brief Shared structs, constants and globals for the three-stage pipeline.
+ *
+ * Data flows device -> demods[] -> outputs[] through these structs,
+ * synchronized with mutex/condvar/rwlock (see AGENTS.md, Architecture).
+ */
+
 #ifndef _POSIX_C_SOURCE
 #define _POSIX_C_SOURCE 200809L
 #endif
@@ -37,21 +45,50 @@ struct real_buffer;
 struct channel_pipeline;
 struct output_state;
 
+/**
+ * @brief Demodulator entry point: one decimated IQ chunk in, audio out.
+ *
+ * Implemented by the demodulate_* functions in demod.h; selected per
+ * channel via channel_pipeline.demodulate.
+ *
+ * @param[in,out] pipeline Channel pipeline; carries mode state (e.g. prev_sample).
+ * @param[in] input Decimated baseband chunk, not modified.
+ * @param[out] output Demodulated real samples.
+ */
 typedef void (*demodulate_fn)(
     struct channel_pipeline *pipeline, const struct iq_buffer *input, struct real_buffer *output);
 
+/**
+ * @struct iq_buffer
+ * @brief Chunk of interleaved complex baseband samples, +/-128 float convention.
+ *
+ * Fixed capacity, no hot-path allocation; .len is the valid sample count.
+ */
 struct iq_buffer
 {
     float complex samples[MAXIMUM_IQ_LENGTH];
     int len;
 };
 
+/**
+ * @struct real_buffer
+ * @brief Chunk of real-valued samples (demod output or audio).
+ *
+ * Fixed capacity, no hot-path allocation; .len is the valid sample count.
+ */
 struct real_buffer
 {
     float samples[MAXIMUM_BUF_LENGTH];
     int len;
 };
 
+/**
+ * @struct channel_pipeline
+ * @brief Per-channel DSP chain state: rates, filters, demod selection.
+ *
+ * One stage of pipeline_process() runs per member group; liquid objects
+ * are created by dsp_init_filters() and freed by pipeline_cleanup().
+ */
 struct channel_pipeline
 {
     int input_rate;
@@ -97,9 +134,14 @@ struct channel_pipeline
     demodulate_fn demodulate;
 };
 
-/* Device state - capture parameters plus the union of all backend gain
- * controls. Each backend uses the fields it knows and ignores the rest;
- * the opaque dev handle is cast to the backend's own type internally. */
+/**
+ * @struct device_state
+ * @brief Capture parameters plus the union of all backend gain controls.
+ *
+ * Also owns the ping-pong chunk handoff shared by the producer and all
+ * demods. Each backend uses the fields it knows and ignores the rest;
+ * the opaque dev handle is cast to the backend's own type internally.
+ */
 struct device_state
 {
     pthread_t thread;
@@ -136,7 +178,10 @@ struct device_state
     FILE *record_file;                    /* open while recording; NULL = recording off */
 };
 
-/* Demod state - demodulation and signal processing */
+/**
+ * @struct demod_state
+ * @brief Per-channel demod thread state: pipeline, handoff bookkeeping, audio.
+ */
 struct demod_state
 {
     pthread_t thread;
@@ -154,7 +199,10 @@ struct demod_state
     struct output_state *output_target;
 };
 
-/* Output modes */
+/**
+ * @enum output_mode_t
+ * @brief How a channel's audio leaves the program.
+ */
 typedef enum
 {
     OUTPUT_FILE,
@@ -162,7 +210,10 @@ typedef enum
     OUTPUT_UDP
 } output_mode_t;
 
-/* TCP server state */
+/**
+ * @struct tcp_state
+ * @brief Multi-client TCP broadcast server state.
+ */
 struct tcp_state
 {
     int listen_fd;                  /* Server socket */
@@ -171,14 +222,20 @@ struct tcp_state
     pthread_mutex_t clients_m;      /* Protect client array */
 };
 
-/* UDP client state */
+/**
+ * @struct udp_state
+ * @brief Fire-and-forget UDP client state.
+ */
 struct udp_state
 {
     int sock;                /* UDP socket */
     struct sockaddr_in dest; /* Destination address */
 };
 
-/* Output state - file I/O and networking */
+/**
+ * @struct output_state
+ * @brief Per-channel output stage: PCM16 buffer, sink union, handoff sync.
+ */
 struct output_state
 {
     pthread_t thread;

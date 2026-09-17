@@ -29,7 +29,7 @@ README.md for features, installation, and usage.
 
 ## Build & test
 
-```
+```sh
 make            # both binaries: bin/rtl_multi, bin/rsp_multi
 make rtl        # only RTL-SDR binary
 make rsp        # only RSP binary
@@ -50,8 +50,7 @@ No test suite exists. Verification options:
 - **Profiling (callgrind, no hardware):** follow `docs/PROFILING.md` — build
   with `make profile-rtl` / `make profile-rsp`, profile the `-I` file mode
   (baseline + optional live-TCP-clients variant), and read results with
-  `callgrind_annotate`. Latest recorded results: `docs/profiling_results.md`
-  (results docs stay uncommitted).
+  `callgrind_annotate`.
 
 ## Architecture
 
@@ -163,6 +162,14 @@ CLI parity (`-s` sets both `rate_in` and `rate_out`).
   `options_parse`.
 - **Buffers:** `iq_buffer` / `real_buffer` carry `.len` — always set it.
   DSP scratch buffers: `static _Thread_local`.
+- **Header docs:** Doxygen blocks on every public declaration — `include/dsp.h`
+  is the canonical example. `@file` role block per header; `@brief` one-liner
+  (behavioral notes like "no-op unless enabled" go here); short prose only when
+  the contract isn't obvious; `@param[in]/[out]/[in,out]` directions; `@retval`
+  for multi-valued returns, `@return` for 0/-1; `@struct`/`@enum`/`@typedef` +
+  `/**<` field comments for types; `@note`/`@see` sparingly. Trivial void fns
+  may be brief-only. Interior struct comments (handoff protocol, filter
+  internals) stay plain `/* */` — don't convert them.
 - **GPLv2+** — source files carry the GPL header.
 
 ## Constraints
