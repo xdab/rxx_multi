@@ -1,5 +1,8 @@
 # rxx_multi
 
+[![CI](https://github.com/xdab/rxx_multi/actions/workflows/ci.yml/badge.svg)](https://github.com/xdab/rxx_multi/actions/workflows/ci.yml)
+[![License: GPL v3](https://img.shields.io/badge/License-GPLv3-blue.svg)](LICENSE.md)
+
 Multi-channel narrowband SDR receiver and demodulator with two backends from
 one codebase: `rtl_multi` for RTL-SDR dongles and `rsp_multi` for SDRplay RSP
 devices. Monitors multiple frequencies simultaneously from a single receiver
@@ -198,4 +201,4 @@ See `AGENTS.md` for implementation notes, backend details, and constraints.
 
 ## License
 
-GPLv2+
+GPLv3 — see [`LICENSE.md`](LICENSE.md).

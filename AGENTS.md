@@ -170,7 +170,8 @@ CLI parity (`-s` sets both `rate_in` and `rate_out`).
   `/**<` field comments for types; `@note`/`@see` sparingly. Trivial void fns
   may be brief-only. Interior struct comments (handoff protocol, filter
   internals) stay plain `/* */` — don't convert them.
-- **GPLv2+** — source files carry the GPL header.
+- **GPLv3** — licensed project-wide via `LICENSE.md` only; no per-file license
+  header blocks.
 
 ## Constraints
 
