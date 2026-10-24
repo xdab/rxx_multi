@@ -41,9 +41,10 @@ jobs:
       - name: Install dependencies
         run: |
           sudo apt-get update
-          # clang-tidy only parses (doesn't link), but core + RTL need rtl-sdr.h;
-          # RSP is out of scope (no SDRplay header in CI)
-          sudo apt-get install -y librtlsdr-dev
+          # clang-tidy only parses (doesn't link), but types.h pulls in
+          # <liquid/liquid.h> and the RTL backend needs rtl-sdr.h; RSP is out
+          # of scope (no SDRplay header in CI)
+          sudo apt-get install -y librtlsdr-dev libliquid-dev
           # Same LLVM pin as the fmt-check job's clang-format: the version
           # the project is analyzed with
           pip install clang-tidy==23.1.3
