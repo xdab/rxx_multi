@@ -39,3 +39,6 @@ massif.out*
 
 # Generated API docs
 docs/doxygen/
+
+# Local planning ledger
+TODOS.md
