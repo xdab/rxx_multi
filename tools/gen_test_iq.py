@@ -35,8 +35,12 @@ def atofs(s):
 def main():
     if len(sys.argv) < 7:
         sys.exit(__doc__)
-    out, rate, center, dur = (sys.argv[1], atofs(sys.argv[2]),
-                              atofs(sys.argv[3]), float(sys.argv[4]))
+    out, rate, center, dur = (
+        sys.argv[1],
+        atofs(sys.argv[2]),
+        atofs(sys.argv[3]),
+        float(sys.argv[4]),
+    )
     chans = []
     for spec in sys.argv[5:]:
         parts = spec.split(":")
@@ -51,12 +55,15 @@ def main():
     amp = 0.7 / len(chans)
     for freq, dev, mod in chans:
         phi = 2 * np.pi * dev * np.cumsum(np.sin(2 * np.pi * mod * t)) / rate
-        sig += (amp * np.exp(1j * phi)).astype(np.complex64) \
-            * np.exp(1j * 2 * np.pi * (freq - center) * t).astype(np.complex64)
+        sig += (amp * np.exp(1j * phi)).astype(np.complex64) * np.exp(
+            1j * 2 * np.pi * (freq - center) * t
+        ).astype(np.complex64)
 
     sig.tofile(out)
-    print(f"wrote {out}: {n} samples @ {rate:.0f} Hz, center {center/1e6:.3f} MHz"
-          f" ({n * 8} bytes, {dur:.1f} s)")
+    print(
+        f"wrote {out}: {n} samples @ {rate:.0f} Hz, center {center / 1e6:.3f} MHz"
+        f" ({n * 8} bytes, {dur:.1f} s)"
+    )
 
 
 if __name__ == "__main__":

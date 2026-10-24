@@ -1,6 +1,7 @@
 #!/usr/bin/env python3
 
 import argparse
+import contextlib
 import shutil
 import subprocess
 import sys
@@ -41,15 +42,14 @@ def dump_log(log_path):
 def main():
     ap = argparse.ArgumentParser(
         description="rsp_multi E2E capture test: three WBFM channels -> TCP, "
-        "parallel nc recording, WAV conversion.")
-    ap.add_argument("--freqs", default="102.0M,102.4M,103.0M",
-                    help="comma-separated channel frequencies")
-    ap.add_argument("--duration", type=float, default=15.0,
-                    help="seconds to record per channel")
-    ap.add_argument("--ramp", type=float, default=4.0,
-                    help="seconds to wait for receiver startup")
-    ap.add_argument("--out", default="/tmp/opencode",
-                    help="output directory for .raw/.wav/.log")
+        "parallel nc recording, WAV conversion."
+    )
+    ap.add_argument(
+        "--freqs", default="102.0M,102.4M,103.0M", help="comma-separated channel frequencies"
+    )
+    ap.add_argument("--duration", type=float, default=15.0, help="seconds to record per channel")
+    ap.add_argument("--ramp", type=float, default=4.0, help="seconds to wait for receiver startup")
+    ap.add_argument("--out", default="/tmp/opencode", help="output directory for .raw/.wav/.log")
     args = ap.parse_args()
 
     for tool in ("nc", "ffmpeg"):
@@ -67,22 +67,21 @@ def main():
     outputs = ",".join(f"tcp:{BASE_PORT + i}" for i in range(len(freqs)))
     log_path = out / "rsp_multi.log"
 
-    with open(log_path, "wb") as log:
+    with open(log_path, "wb") as log, contextlib.ExitStack() as raws:
         rx = subprocess.Popen(
-            [str(rx_bin), "-f", args.freqs, "-M", "wbfm", "-O", outputs],
-            stdout=log, stderr=log)
+            [str(rx_bin), "-f", args.freqs, "-M", "wbfm", "-O", outputs], stdout=log, stderr=log
+        )
 
         time.sleep(args.ramp)
         if rx.poll() is not None:
             dump_log(log_path)
             sys.exit("receiver exited during startup")
 
-        recs = []
+        procs = []
         for i in range(len(freqs)):
-            raw = open(out / f"ch{i + 1}.raw", "wb")
-            proc = subprocess.Popen(["nc", "localhost", str(BASE_PORT + i)],
-                                    stdout=raw)
-            recs.append((proc, raw))
+            raw = raws.enter_context(open(out / f"ch{i + 1}.raw", "wb"))
+            proc = subprocess.Popen(["nc", "localhost", str(BASE_PORT + i)], stdout=raw)
+            procs.append(proc)
 
         print(f"recording {len(freqs)} channels for {args.duration:g} s ...")
         time.sleep(args.duration)
@@ -93,12 +92,11 @@ def main():
         except subprocess.TimeoutExpired:
             rx.kill()
 
-        for proc, raw in recs:
+        for proc in procs:
             try:
                 proc.wait(timeout=10)
             except subprocess.TimeoutExpired:
                 proc.kill()
-            raw.close()
 
     if rx.returncode not in (0, -15, -2):
         dump_log(log_path)
@@ -109,15 +107,28 @@ def main():
         raw = out / f"ch{i + 1}.raw"
         wav = out / f"ch{i + 1}_{mhz_label(freq_mhz(token))}MHz.wav"
         conv = subprocess.run(
-            ["ffmpeg", "-y", "-loglevel", "error", "-f", "s16le",
-             "-ar", str(AUDIO_RATE), "-ac", "1", "-i", str(raw), str(wav)])
+            [
+                "ffmpeg",
+                "-y",
+                "-loglevel",
+                "error",
+                "-f",
+                "s16le",
+                "-ar",
+                str(AUDIO_RATE),
+                "-ac",
+                "1",
+                "-i",
+                str(raw),
+                str(wav),
+            ]
+        )
         if conv.returncode != 0:
             sys.exit(f"ffmpeg failed on {raw}")
         raw.unlink()
         secs = (wav.stat().st_size - 44) / (2 * AUDIO_RATE)
         wavs.append((wav, freq_mhz(token), secs))
-        print(f"ch{i + 1} ({mhz_label(freq_mhz(token))} MHz): "
-              f"{wav} ({secs:.1f} s)")
+        print(f"ch{i + 1} ({mhz_label(freq_mhz(token))} MHz): {wav} ({secs:.1f} s)")
 
     print("done - wav files ready in " + str(out))
 

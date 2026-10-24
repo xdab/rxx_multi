@@ -24,10 +24,10 @@ def main():
     path = sys.argv[1]
     rate = int(sys.argv[2]) if len(sys.argv) > 2 else 48000
     ch = int(sys.argv[3]) if len(sys.argv) > 3 else 1
-    out = sys.argv[4] if len(sys.argv) > 4 else (
-        os.path.splitext(path)[0] + ".wav")
+    out = sys.argv[4] if len(sys.argv) > 4 else (os.path.splitext(path)[0] + ".wav")
 
-    data = open(path, "rb").read()
+    with open(path, "rb") as f:
+        data = f.read()
     if len(data) % (2 * ch):
         sys.exit(f"file size not a multiple of {2 * ch} bytes (S16_LE x {ch})")
 
@@ -37,9 +37,11 @@ def main():
         w.setframerate(rate)
         w.writeframes(data)
 
-    print(f"{out}: {len(data) // (2 * ch)} frames @ {rate} Hz, "
-          f"{'mono' if ch == 1 else f'{ch} channels'}, 16-bit "
-          f"({len(data) / (2 * ch) / rate:.1f} s)")
+    print(
+        f"{out}: {len(data) // (2 * ch)} frames @ {rate} Hz, "
+        f"{'mono' if ch == 1 else f'{ch} channels'}, 16-bit "
+        f"({len(data) / (2 * ch) / rate:.1f} s)"
+    )
 
 
 if __name__ == "__main__":

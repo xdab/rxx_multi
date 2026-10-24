@@ -31,6 +31,7 @@ Usage:
   --raw-rate HZ  sample rate of raw files, for reporting only
                  (default 48000)
 """
+
 import sys
 import wave
 
@@ -47,12 +48,12 @@ def load(path, raw_rate):
             channels = w.getnchannels()
             raw = w.readframes(w.getnframes())
         if channels != 1:
-            print(f"WARNING: {path} is {channels}-channel; comparing "
-                  f"interleaved samples as-is")
+            print(f"WARNING: {path} is {channels}-channel; comparing interleaved samples as-is")
         label = f"{path} (wav {rate} Hz"
         label += f", {channels}ch)" if channels != 1 else ")"
     else:
-        raw = open(path, "rb").read()
+        with open(path, "rb") as f:
+            raw = f.read()
         rate = raw_rate
         label = f"{path} (raw {rate} Hz)"
     if len(raw) % 2:
@@ -71,10 +72,10 @@ def diff_stats(a, b, off=0):
     the reference relative to the candidate (see best_offset)."""
     if off >= 0:
         n = min(len(a) - off, len(b))
-        d = a[off:off + n] - b[:n]
+        d = a[off : off + n] - b[:n]
     else:
         n = min(len(a), len(b) + off)
-        d = a[:n] - b[-off:-off + n]
+        d = a[:n] - b[-off : -off + n]
     return float(np.max(np.abs(d))) if n else 0.0, rms(d)
 
 
@@ -88,7 +89,7 @@ def best_offset(a, b, scan):
         hi = min(n, n + off)
         if hi - lo < 1000:
             continue
-        err = np.mean(np.abs(a[lo:hi:7] - b[lo - off:hi - off:7]))
+        err = np.mean(np.abs(a[lo:hi:7] - b[lo - off : hi - off : 7]))
         if best_err is None or err < best_err:
             best_err, best_off = err, off
     return best_off
@@ -96,47 +97,57 @@ def best_offset(a, b, scan):
 
 def main():
     import argparse
+
     ap = argparse.ArgumentParser(
         description="Compare two audio files (raw PCM16 / WAV, any "
-                    "combo) for content equality; DSP regression gate.")
+        "combo) for content equality; DSP regression gate."
+    )
     ap.add_argument("ref")
     ap.add_argument("cand")
-    ap.add_argument("--max-diff", type=float, default=0.0,
-                    help="tolerated max |diff| in int16 LSB (default 0)")
-    ap.add_argument("--min-snr", type=float, default=60.0,
-                    help="SNR pass threshold in dB (default 60)")
-    ap.add_argument("--scan-offset", type=int, default=0,
-                    help="search +/- N samples for best alignment")
-    ap.add_argument("--raw-rate", type=int, default=48_000,
-                    help="sample rate of raw files, reporting only")
-    ap.add_argument("--max-seconds", type=float, default=None,
-                    help="compare only the first N seconds of both files")
+    ap.add_argument(
+        "--max-diff", type=float, default=0.0, help="tolerated max |diff| in int16 LSB (default 0)"
+    )
+    ap.add_argument(
+        "--min-snr", type=float, default=60.0, help="SNR pass threshold in dB (default 60)"
+    )
+    ap.add_argument(
+        "--scan-offset", type=int, default=0, help="search +/- N samples for best alignment"
+    )
+    ap.add_argument(
+        "--raw-rate", type=int, default=48_000, help="sample rate of raw files, reporting only"
+    )
+    ap.add_argument(
+        "--max-seconds",
+        type=float,
+        default=None,
+        help="compare only the first N seconds of both files",
+    )
     args = ap.parse_args()
 
     a, rate_a, label_a = load(args.ref, args.raw_rate)
     b, rate_b, label_b = load(args.cand, args.raw_rate)
     if args.max_seconds is not None:
-        a = a[:int(rate_a * args.max_seconds)]
-        b = b[:int(rate_b * args.max_seconds)]
+        a = a[: int(rate_a * args.max_seconds)]
+        b = b[: int(rate_b * args.max_seconds)]
     if rate_a != rate_b:
         print(f"WARNING: sample rates differ: {rate_a} vs {rate_b}")
 
     if len(a) != len(b):
-        print(f"WARNING: lengths differ: {len(a)} vs {len(b)} samples "
-              f"({abs(len(a) - len(b))} = "
-              f"{abs(len(a) - len(b)) / max(rate_a, 1):.3f} s)")
+        print(
+            f"WARNING: lengths differ: {len(a)} vs {len(b)} samples "
+            f"({abs(len(a) - len(b))} = "
+            f"{abs(len(a) - len(b)) / max(rate_a, 1):.3f} s)"
+        )
 
     if np.array_equal(a, b):
-        print(f"IDENTICAL: {label_a} == {label_b} "
-              f"({len(a)} samples, bit-exact)")
+        print(f"IDENTICAL: {label_a} == {label_b} ({len(a)} samples, bit-exact)")
         return 0
 
     off = 0
     if args.scan_offset:
         off = best_offset(a, b, args.scan_offset)
         if off:
-            print(f"best alignment: {off} samples "
-                  f"({off / rate_b * 1000:.3f} ms)")
+            print(f"best alignment: {off} samples ({off / rate_b * 1000:.3f} ms)")
     max_diff, diff_rms = diff_stats(a, b, off)
     snr = 20 * np.log10(rms(a) / diff_rms) if diff_rms > 0 else float("inf")
 
@@ -150,8 +161,7 @@ def main():
     ok = max_diff <= args.max_diff or snr >= args.min_snr
     why = "max-diff" if max_diff <= args.max_diff else "min-snr"
     if ok:
-        print(f"MATCH (within tolerance, {why} criterion): "
-              f"audio content preserved")
+        print(f"MATCH (within tolerance, {why} criterion): audio content preserved")
         return 0
     print("MISMATCH: outputs differ beyond tolerance")
     return 1

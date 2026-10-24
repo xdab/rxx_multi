@@ -102,6 +102,32 @@ doc:
 	doxygen Doxyfile
 	@echo "✓ API docs: docs/doxygen/html/index.html"
 
+# Style: C via clang-format (src/, include/), tools/*.py via ruff (config in
+# pyproject.toml). fmt-check is the gate counterpart — it exits nonzero on any
+# finding, so it can sit in CI or a pre-commit hook.
+C_SOURCES := $(wildcard src/core/*.c) $(wildcard src/backend/*/*.c) $(wildcard include/*.h)
+PY_SOURCES := $(wildcard tools/*.py)
+
+.PHONY: fmt
+fmt:
+	@command -v clang-format >/dev/null 2>&1 || { \
+		echo "ERROR: clang-format not installed (Arch: sudo pacman -S clang)"; exit 1; }
+	@command -v ruff >/dev/null 2>&1 || { \
+		echo "ERROR: ruff not installed (Arch: sudo pacman -S ruff)"; exit 1; }
+	clang-format -i $(C_SOURCES)
+	ruff format $(PY_SOURCES)
+	ruff check --fix $(PY_SOURCES)
+
+.PHONY: fmt-check
+fmt-check:
+	@command -v clang-format >/dev/null 2>&1 || { \
+		echo "ERROR: clang-format not installed (Arch: sudo pacman -S clang)"; exit 1; }
+	@command -v ruff >/dev/null 2>&1 || { \
+		echo "ERROR: ruff not installed (Arch: sudo pacman -S ruff)"; exit 1; }
+	clang-format --dry-run --Werror $(C_SOURCES)
+	ruff format --check $(PY_SOURCES)
+	ruff check $(PY_SOURCES)
+
 # Help target
 .PHONY: help
 help:
@@ -113,6 +139,8 @@ help:
 	@echo "  profile     - Build bin/*.prof with debug symbols (valgrind/callgrind)"
 	@echo "  clean       - Remove build artifacts (obj/, bin/)"
 	@echo "  doc         - Generate API docs with doxygen"
+	@echo "  fmt         - Format src/, include/ (clang-format) and tools/*.py (ruff)"
+	@echo "  fmt-check   - Style gate: nonzero on any formatting/lint finding"
 	@echo "  install     - Install both binaries to /usr/local/bin"
 	@echo ""
 	@echo "Usage:"

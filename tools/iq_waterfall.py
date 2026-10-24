@@ -55,9 +55,16 @@ def main():
     t = (idx[:, 0] + nfft / 2) / rate
 
     plt.figure(figsize=(11, 6))
-    plt.imshow(spec, aspect="auto", origin="lower", cmap="turbo",
-               extent=(f[0] / 1e6, f[-1] / 1e6, t[0], t[-1]),
-               vmin=-80, vmax=0, interpolation="nearest")
+    plt.imshow(
+        spec,
+        aspect="auto",
+        origin="lower",
+        cmap="turbo",
+        extent=(f[0] / 1e6, f[-1] / 1e6, t[0], t[-1]),
+        vmin=-80,
+        vmax=0,
+        interpolation="nearest",
+    )
     plt.colorbar(label="dB rel max")
     plt.xlabel("Frequency [MHz]" if center else "Offset [MHz]")
     plt.ylabel("Time [s]")
