@@ -22,6 +22,24 @@ jobs:
       - name: Build rtl_multi
         run: make rtl
 
+  regression:
+    # Hardware-free demodulation gate: tools/regression.py synthesizes a
+    # multi-channel scene, demodulates it via -I file input and checks each
+    # channel's output mechanically (tone frequency, rejection). Same scope
+    # rationale as build-rtl: RTL binary, no RSP.
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - name: Install dependencies
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y gcc make librtlsdr-dev libliquid-dev
+          pip install numpy
+      - name: Build rtl_multi
+        run: make rtl
+      - name: Regression suite
+        run: python3 tools/regression.py
+
   fmt-check:
     runs-on: ubuntu-latest
     steps:

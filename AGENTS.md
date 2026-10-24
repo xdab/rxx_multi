@@ -44,8 +44,14 @@ regenerates `compile_commands.json`; RSP is out of scope — no SDRplay header
 in CI). Tidy findings are fixed or `// NOLINT(check)`'d at the site; the
 check-wide disables in `.clang-tidy` each carry their reason.
 
-No test suite exists. Verification options:
+Verification options:
 
+- **Regression suite (no hardware):** `python3 tools/regression.py` — builds
+  the `tools/gen_scene_iq.py` deterministic multi-channel scene (cached in
+  `/tmp`, generated on first use), runs one `-I` file-input case per
+  modulation (`fm/am/usb/lsb` tone checks + rejection, `raw` FSK check), and
+  exits nonzero on failure. Runs as a CI job. `--update-ref` / `--ref` add a
+  bit-exact comparison against a saved reference decode for refactor gating.
 - **File input mode (`-I`)** works with no hardware: feed any CF32 recording,
   e.g. `bin/rsp_multi -f 99.85M -M wbfm -I file.cf32:2M:100M -O out.raw`.
   Useful for smoke tests and DSP regressions.
