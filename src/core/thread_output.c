@@ -1,6 +1,7 @@
 #include "output.h"
 #include "thread.h"
 #include "types.h"
+#include <pthread.h>
 #include <stdio.h>
 
 void *output_thread_fn(void *arg)

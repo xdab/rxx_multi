@@ -1,3 +1,4 @@
+#include <stdint.h>
 #include <stdio.h>
 #include <stdlib.h>
 #include <string.h>
@@ -5,6 +6,7 @@
 #include <rtl-sdr.h>
 
 #include "device.h"
+#include "options.h"
 #include "types.h"
 
 #define MAX_TUNER_GAINS 128
@@ -106,7 +108,7 @@ int verbose_device_search(char *s)
     char product[STATIC_STRING_SIZE_LOCAL];
     char serial[STATIC_STRING_SIZE_LOCAL];
 
-    device_count = rtlsdr_get_device_count();
+    device_count = (int)rtlsdr_get_device_count();
     if (!device_count)
     {
         fprintf(stderr, "No supported devices found.\n");
@@ -157,7 +159,7 @@ int verbose_device_search(char *s)
     for (i = 0; i < device_count; i++)
     {
         rtlsdr_get_device_usb_strings(i, vendor, product, serial);
-        offset = strlen(serial) - strlen(s);
+        offset = (int)strlen(serial) - (int)strlen(s);
         if (offset < 0)
         {
             continue;
@@ -224,7 +226,9 @@ void device_apply_options(options_t *opts, int file_input)
         fprintf(stderr, "WARNING: -g has no effect in IQ file input mode.\n");
 }
 
+// NOLINTBEGIN(bugprone-easily-swappable-parameters): positional contract
 int device_plan_capture(int file_input, uint32_t rate_in, uint64_t width, struct capture_plan *plan)
+// NOLINTEND(bugprone-easily-swappable-parameters)
 {
     plan->downsample = (int)(width / rate_in);
     if (plan->downsample < 1)

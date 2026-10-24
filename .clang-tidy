@@ -1,0 +1,55 @@
+# clang-tidy check set, run by `make tidy` (the commit gate) - see AGENTS.md.
+# Findings are triaged one by one: fix the code, or a // NOLINT(check) at the
+# site. No check-wide disables here without an attached reason.
+Checks: >
+  -*,
+  bugprone-*,
+  -bugprone-signed-bitwise,
+  -bugprone-implicit-widening-of-multiplication-result,
+  -bugprone-unchecked-string-to-number-conversion,
+  cert-*,
+  -cert-err33-c,
+  -cert-err34-c,
+  misc-*,
+  readability-function-size,
+  readability-inconsistent-declaration-parameter-name,
+  readability-suspicious-call-argument
+CheckOptions:
+  # Standard POSIX/glibc feature-test macros: reserved identifiers by
+  # definition — setting them is their documented purpose. The option is
+  # repeated under the cert aliases because aliased checks don't inherit the
+  # canonical check's options.
+  - key: bugprone-reserved-identifier.AllowedIdentifiers
+    value: '_POSIX_C_SOURCE;_DEFAULT_SOURCE'
+  - key: cert-dcl37-c.AllowedIdentifiers
+    value: '_POSIX_C_SOURCE;_DEFAULT_SOURCE'
+  - key: cert-dcl51-cpp.AllowedIdentifiers
+    value: '_POSIX_C_SOURCE;_DEFAULT_SOURCE'
+  # glibc's public headers (getopt.h, time.h, pthread.h) are thin wrappers
+  # over bits/ internals, but include-cleaner can't walk up to the public
+  # header and suggests the non-self-contained bits/ files directly. Never
+  # suggest those; where the public header still trips the check, a
+  # // NOLINT(misc-include-cleaner) sits on the include line.
+  - key: misc-include-cleaner.IgnoreHeaders
+    value: 'bits/.*'
+# Check-wide disables, each with its reason:
+#
+# bugprone-signed-bitwise: the DSP bit-packs and masks on `int` (C integer
+# promotion makes `uint8_t << 4` signed regardless of the operand types). The
+# check targets C++ signed shift/mask overflow; in C these operations are
+# well-defined at the magnitudes used, and qualifying every site unsigned
+# would be churn without safety. If a bitwise bug is ever suspected,
+# re-enable the check and triage afresh.
+#
+# bugprone-implicit-widening-of-multiplication-result: index arithmetic like
+# `buf[i * 2]` widens uint->size_t. Every multiplicand is bounded by a
+# MAXIMUM_* static buffer size (<= 2^20), so 32-bit products cannot overflow;
+# casting at ~30 sites would be churn without safety.
+#
+# bugprone-unchecked-string-to-number-conversion / cert-err34-c: the CLI
+# suffix parsers (atofs/atoft/atofp, rtl_fm heritage) accept loose input by
+# design; strict strtol/strtod would change which CLI syntax is accepted.
+#
+# cert-err33-c: flags the return of ~100 fprintf logging calls (and a few
+# fclose/fwrite on fire-and-forget output paths) whose results are
+# deliberately disregarded; checking them would be noise.

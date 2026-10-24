@@ -1,7 +1,10 @@
 #include "dsp.h"
+#include "types.h"
+#include <complex.h>
 #include <liquid/liquid.h>
 #include <math.h>
 #include <pthread.h>
+#include <stdint.h>
 #include <stdio.h>
 #include <stdlib.h>
 #include <string.h>
@@ -116,11 +119,13 @@ static inline float complex avx_hsum_pairs(__m256 a0, __m256 a1, __m256 a2, __m2
     return out[0] + out[1] * I;
 }
 
+// NOLINTBEGIN(bugprone-easily-swappable-parameters): DSP calling convention
 static inline float complex decim_dot_avx2(
     const float *restrict taps,
     const float *restrict pairs,
     const float complex *restrict x,
     unsigned int n_taps)
+// NOLINTEND(bugprone-easily-swappable-parameters)
 {
     const float *restrict xf = (const float *)x;
     unsigned int n4 = n_taps / 4;
@@ -148,6 +153,7 @@ static inline float complex decim_dot_avx2(
     return res;
 }
 
+// NOLINTBEGIN(bugprone-easily-swappable-parameters): DSP calling convention
 static inline void decim_dot2_avx2(
     const float *restrict taps,
     const float *restrict pairs,
@@ -156,6 +162,7 @@ static inline void decim_dot2_avx2(
     unsigned int n_taps,
     float complex *restrict ra,
     float complex *restrict rb)
+// NOLINTEND(bugprone-easily-swappable-parameters)
 {
     const float *restrict fa = (const float *)xa;
     const float *restrict fb = (const float *)xb;
@@ -382,7 +389,7 @@ int dsp_resample_output(struct channel_pipeline *pipeline, struct real_buffer *b
         return 0;
     }
 
-    unsigned int max_out = (unsigned int)ceilf(in_len * fabsf(r)) + 16;
+    unsigned int max_out = (unsigned int)ceilf((float)in_len * fabsf(r)) + 16;
     static _Thread_local float temp_buf[MAXIMUM_BUF_LENGTH];
     if (max_out > MAXIMUM_BUF_LENGTH)
         max_out = MAXIMUM_BUF_LENGTH;
@@ -484,7 +491,7 @@ void dsp_apply_dc_block(struct channel_pipeline *pipeline, struct real_buffer *b
 float dsp_polar_discriminant(float complex current, float complex previous)
 {
     float complex delta = current * conjf(previous);
-    return atan2f(cimagf(delta), crealf(delta)) / M_PI * (float)(1 << 14);
+    return atan2f(cimagf(delta), crealf(delta)) / (float)M_PI * (float)(1 << 14);
 }
 
 int dsp_init_filters(struct channel_pipeline *pipeline)

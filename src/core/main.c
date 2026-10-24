@@ -9,6 +9,7 @@
 #include <math.h>
 #include <pthread.h>
 #include <signal.h>
+#include <stdint.h>
 #include <stdio.h>
 #include <stdlib.h>
 #include <string.h>
@@ -61,7 +62,9 @@ static demodulate_fn mode_demod_for(enum demod_mode mode)
  * frequency. Multi-channel: tune to the midpoint; capture rate must
  * cover full span. File input (-I): rate and center come from the
  * recording itself. */
+// NOLINTBEGIN(bugprone-easily-swappable-parameters): positional contract
 static int plan_capture(const options_t *opts, int file_input, int *downsample, int *rate_channel)
+// NOLINTEND(bugprone-easily-swappable-parameters)
 {
     int rate_in = (int)opts->rate_in;
     uint64_t width;
@@ -130,7 +133,9 @@ static int plan_capture(const options_t *opts, int file_input, int *downsample, 
     return 0;
 }
 
+// NOLINTBEGIN(bugprone-easily-swappable-parameters): positional contract
 static int setup_pipelines(const options_t *opts, int rate_channel, int downsample)
+// NOLINTEND(bugprone-easily-swappable-parameters)
 {
     float output_scale = (float)(1 << 15) / (128.0f * (float)downsample);
     if (output_scale < 1.0f)
@@ -177,7 +182,7 @@ static int setup_pipelines(const options_t *opts, int rate_channel, int downsamp
         outputs[i].mode = ch->output_mode;
         strncpy(outputs[i].filename, ch->filename, sizeof(outputs[i].filename) - 1);
         outputs[i].filename[sizeof(outputs[i].filename) - 1] = '\0';
-        outputs[i].rate = (uint32_t)opts->rate_audio;
+        outputs[i].rate = (int)opts->rate_audio;
 
         if (outputs[i].mode == OUTPUT_TCP)
         {
@@ -236,7 +241,9 @@ static void bringup_file_input(const options_t *opts)
         device.freq / 1e6);
 }
 
+// NOLINTBEGIN(bugprone-easily-swappable-parameters): positional contract
 static int bringup_device(const options_t *opts, int record, int downsample)
+// NOLINTEND(bugprone-easily-swappable-parameters)
 {
     int r;
 

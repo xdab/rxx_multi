@@ -128,6 +128,42 @@ fmt-check:
 	ruff format --check $(PY_SOURCES)
 	ruff check $(PY_SOURCES)
 
+# Compile database for editor IntelliSense and clang-tidy (make compdb).
+# Entries mirror the per-backend build flags; `tidy` analyzes core + RTL only —
+# RSP needs the SDRplay API header, which CI doesn't install (same scope
+# decision as the build job).
+COMPDB := compile_commands.json
+TIDY_SRCS := $(CORE_SRC) $(wildcard src/backend/rtl/*.c)
+
+.PHONY: compdb
+compdb:
+	@: > $(COMPDB); echo '[' >> $(COMPDB)
+	@q='\"'; \
+	for src in $(TIDY_SRCS); do \
+		{ printf '{"directory": "%s", "file": "%s", "arguments": ["%s"' "$(CURDIR)" "$$src" "$(CC)"; \
+		  for fl in $(CFLAGS); do printf ', "%s"' "$$fl"; done; \
+		  printf ', "-DAPP_NAME=%srtl_multi%s"' "$$q" "$$q"; \
+		  printf ', "-c", "%s"]},\n' "$$src"; } >> $(COMPDB); \
+	done
+	@for src in $(wildcard src/backend/rsp/*.c); do \
+		{ printf '{"directory": "%s", "file": "%s", "arguments": ["%s"' "$(CURDIR)" "$$src" "$(CC)"; \
+		  for fl in $(CFLAGS); do printf ', "%s"' "$$fl"; done; \
+		  printf ', "-DAPP_NAME=%srsp_multi%s"' "$$q" "$$q"; \
+		  printf ', "-c", "%s"]},\n' "$$src"; } >> $(COMPDB); \
+	done
+	@sed -i '$$ s/},$$/}/' $(COMPDB)
+	@echo ']' >> $(COMPDB)
+	@echo "✓ $(COMPDB)"
+
+# Static analysis gate (clang-tidy; check set in .clang-tidy at repo root).
+# Findings exit nonzero, like fmt-check. The compdb prerequisite keeps the
+# compile database fresh; clang-tidy only parses (needs headers, not libs).
+.PHONY: tidy
+tidy: compdb
+	@command -v clang-tidy >/dev/null 2>&1 || { \
+		echo "ERROR: clang-tidy not installed (Arch: sudo pacman -S clang)"; exit 1; }
+	clang-tidy -p . $(TIDY_SRCS) --warnings-as-errors=*
+
 # Help target
 .PHONY: help
 help:
@@ -141,6 +177,8 @@ help:
 	@echo "  doc         - Generate API docs with doxygen"
 	@echo "  fmt         - Format src/, include/ (clang-format) and tools/*.py (ruff)"
 	@echo "  fmt-check   - Style gate: nonzero on any formatting/lint finding"
+	@echo "  compdb      - Regenerate compile_commands.json (editor IntelliSense)"
+	@echo "  tidy        - clang-tidy over core + RTL backend (gate, nonzero on findings)"
 	@echo "  install     - Install both binaries to /usr/local/bin"
 	@echo ""
 	@echo "Usage:"

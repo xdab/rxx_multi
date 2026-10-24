@@ -1,5 +1,7 @@
 #include "demod.h"
 #include "dsp.h"
+#include "types.h"
+#include <complex.h>
 
 void demodulate_fm(
     struct channel_pipeline *pipeline, const struct iq_buffer *input, struct real_buffer *output)

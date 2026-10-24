@@ -36,6 +36,14 @@ make rsp        # only RSP binary
 make clean
 ```
 
+Style and static-analysis gates (all three run in CI, pinned to LLVM 23.1.3
+via pip): `make fmt` reformats C via clang-format and `tools/*.py` via ruff
+(config in `pyproject.toml`), `make fmt-check` is its nonzero-exit gate
+counterpart, `make tidy` runs clang-tidy over core + RTL (`make compdb`
+regenerates `compile_commands.json`; RSP is out of scope — no SDRplay header
+in CI). Tidy findings are fixed or `// NOLINT(check)`'d at the site; the
+check-wide disables in `.clang-tidy` each carry their reason.
+
 No test suite exists. Verification options:
 
 - **File input mode (`-I`)** works with no hardware: feed any CF32 recording,

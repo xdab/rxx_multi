@@ -2,7 +2,10 @@
 
 #include "demod.h"
 #include "dsp.h"
+#include "types.h"
 
+#include <liquid/liquid.h>
+#include <stdlib.h>
 #include <string.h>
 
 void pipeline_init(struct channel_pipeline *pipeline)

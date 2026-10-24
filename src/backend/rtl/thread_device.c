@@ -1,7 +1,9 @@
-#include "output.h"
 #include "thread.h"
 #include "types.h"
+#include <complex.h>
+#include <pthread.h>
 #include <rtl-sdr.h>
+#include <stdint.h>
 #include <stdio.h>
 #include <string.h>
 #include <time.h>

@@ -5,7 +5,8 @@
  * operation is channel_count = 1 with channels[0].
  */
 
-#include <getopt.h>
+#include <getopt.h> // NOLINT(misc-include-cleaner): getopt_long/optarg are GNU, not in the POSIX headers
+#include <stdint.h>
 #include <stdio.h>
 #include <stdlib.h>
 #include <string.h>
@@ -187,7 +188,7 @@ static int count_values(const char *str)
 static const char *get_value_at(const char *str, int index)
 {
     static char buf[STATIC_STRING_SIZE];
-    int len = strlen(str);
+    int len = (int)strlen(str);
     int val_idx = 0;
     int start = 0;
     size_t buf_size = sizeof(buf);
@@ -200,7 +201,7 @@ static const char *get_value_at(const char *str, int index)
             {
                 int cpy_len = i - start;
                 if ((size_t)cpy_len >= buf_size)
-                    cpy_len = buf_size - 1;
+                    cpy_len = (int)buf_size - 1;
                 strncpy(buf, str + start, cpy_len);
                 buf[cpy_len] = '\0';
                 return buf;
@@ -399,11 +400,11 @@ int options_parse(int argc, char **argv, options_t *opts)
             }
             break;
         case 's':
-            opts->rate_in = atofs(optarg);
-            opts->rate_out = atofs(optarg);
+            opts->rate_in = (float)atofs(optarg);
+            opts->rate_out = (float)atofs(optarg);
             break;
         case 'r':
-            opts->rate_audio = atofs(optarg);
+            opts->rate_audio = (float)atofs(optarg);
             break;
         case 'E':
             if (strcmp("dc", optarg) == 0)
@@ -538,9 +539,10 @@ double atofs(char *s)
     char last;
     int len;
     double suff = 1.0;
-    len = strlen(s);
+    len = (int)strlen(s);
     last = s[len - 1];
     s[len - 1] = '\0';
+    // NOLINTBEGIN(bugprone-branch-clone): g/k and m/k suffix steps are identical by design
     switch (last)
     {
     case 'g':
@@ -557,7 +559,10 @@ double atofs(char *s)
         suff *= atof(s);
         s[len - 1] = last;
         return suff;
+    default:
+        break;
     }
+    // NOLINTEND(bugprone-branch-clone)
     s[len - 1] = last;
     return atof(s);
 }
@@ -569,10 +574,11 @@ double atoft(char *s)
     int len;
     double suff = 1.0;
 
-    len = strlen(s);
+    len = (int)strlen(s);
     last = s[len - 1];
     s[len - 1] = '\0';
 
+    // NOLINTBEGIN(bugprone-branch-clone): h/m and m/s time steps are identical by design
     switch (last)
     {
     case 'h':
@@ -588,7 +594,10 @@ double atoft(char *s)
         suff *= atof(s);
         s[len - 1] = last;
         return suff;
+    default:
+        break;
     }
+    // NOLINTEND(bugprone-branch-clone)
 
     s[len - 1] = last;
     return atof(s);
@@ -601,7 +610,7 @@ double atofp(char *s)
     int len;
     double suff = 1.0;
 
-    len = strlen(s);
+    len = (int)strlen(s);
     last = s[len - 1];
     s[len - 1] = '\0';
 
