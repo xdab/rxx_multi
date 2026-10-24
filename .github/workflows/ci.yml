@@ -1,0 +1,23 @@
+name: ci
+on:
+  push:
+    branches: [main]
+  pull_request:
+
+permissions:
+  contents: read
+
+jobs:
+  build-rtl:
+    # RTL backend only: librtlsdr installs from apt, while the RSP backend
+    # needs the SDRplay API tarball. The core is byte-identical across
+    # backends and -I bypasses the device, so RTL covers the shared code.
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - name: Install dependencies
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y gcc make librtlsdr-dev libliquid-dev
+      - name: Build rtl_multi
+        run: make rtl
