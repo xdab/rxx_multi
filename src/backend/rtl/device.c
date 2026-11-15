@@ -254,7 +254,19 @@ int device_plan_capture(int file_input, uint32_t rate_in, uint64_t width, struct
     }
 
     /* RTL2832U only supports 225001-300000 and 900001-3200000 Hz.
-     * Snap the rate to the nearest valid range if it falls in the gap. */
+     * Snap the rate up to the nearest valid range: below the low floor,
+     * or into the 300k-900k gap. */
+    if (plan->rate < RTL_RATE_MIN_LOW)
+    {
+        fprintf(
+            stderr,
+            "WARNING: Computed rate %u Hz is below the RTL minimum (225001 Hz). ",
+            plan->rate);
+        plan->downsample =
+            (int)((RTL_RATE_MIN_LOW + rate_in - 1) / rate_in); /* ceiling, >=225001 */
+        plan->rate = (uint32_t)(plan->downsample * rate_in);
+        fprintf(stderr, "Snapped to %u Hz (downsample %ix).\n", plan->rate, plan->downsample);
+    }
     if (plan->rate > RTL_RATE_MAX_LOW && plan->rate < RTL_RATE_MIN_HIGH)
     {
         fprintf(
