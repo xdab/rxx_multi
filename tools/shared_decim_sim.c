@@ -25,10 +25,12 @@
  *                  resamp_crcf (m=3, npfb=64) remainder - kept as the
  *                  all-integer-stages comparison
  *
- * msresamp_crcf was evaluated and DISQUALIFIED: not chunk-independent
- * (rel err ~1.8 between one-shot and chunked feeds in liquid 1.7.0),
- * and ~34 ms per 1M inputs regardless of ratio (fixed m=7/npfb=256
- * arbitrary stage + As=60 half-bands dominate).
+ * msresamp_crcf was evaluated and set aside on cost alone: ~34 ms per
+ * 1M inputs regardless of ratio (fixed m=7/npfb=256 arbitrary stage +
+ * As=60 half-bands dominate). An earlier "not chunk-independent"
+ * claim was a harness artifact (missing reset between one-shot and
+ * chunked runs) and is retracted: msresamp is streaming-safe, as its
+ * per-sample internal buffering promises.
  *
  * Per scenario (CAPTURE RATE_CH WIDTH, all Hz), for baseline and each
  * variant:
