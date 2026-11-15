@@ -61,9 +61,16 @@ static demodulate_fn mode_demod_for(enum demod_mode mode)
  * resulting capture plan. Single-channel: tune directly to the one
  * frequency. Multi-channel: tune to the midpoint; capture rate must
  * cover full span. File input (-I): rate and center come from the
- * recording itself. */
+ * recording itself. Also reports the shared-stage region of interest
+ * (span + one channel width of guard), which may be narrower than the
+ * capture width. */
 // NOLINTBEGIN(bugprone-easily-swappable-parameters): positional contract
-static int plan_capture(const options_t *opts, int file_input, int *downsample, int *rate_channel)
+static int plan_capture(
+    const options_t *opts,
+    int file_input,
+    int *downsample,
+    int *rate_channel,
+    uint64_t *width_shared)
 // NOLINTEND(bugprone-easily-swappable-parameters)
 {
     int rate_in = (int)opts->rate_in;
@@ -130,11 +137,25 @@ static int plan_capture(const options_t *opts, int file_input, int *downsample, 
     /* True channel rate after integer decimation of the capture rate */
     *downsample = plan.downsample;
     *rate_channel = (int)(device.rate / (uint32_t)plan.downsample);
+
+    /* Shared-stage ROI: twice the largest channel offset from the
+     * capture center plus one channel width of guard. Live multi-
+     * channel tuning centers the span midpoint, so the largest offset
+     * is span/2; file centers are arbitrary, so it is measured
+     * directly. */
+    uint64_t maxoff = 0;
+    for (int i = 0; i < opts->channel_count; i++)
+    {
+        uint64_t off = (uint64_t)labs((long)(int64_t)opts->channels[i].freq - (long)device.freq);
+        if (off > maxoff)
+            maxoff = off;
+    }
+    *width_shared = 2ULL * (maxoff + (uint64_t)*rate_channel);
     return 0;
 }
 
 // NOLINTBEGIN(bugprone-easily-swappable-parameters): positional contract
-static int setup_pipelines(const options_t *opts, int rate_channel, int downsample)
+static int setup_pipelines(const options_t *opts, int rate_channel, int downsample, int rate_in)
 // NOLINTEND(bugprone-easily-swappable-parameters)
 {
     float output_scale = (float)(1 << 15) / (128.0f * (float)downsample);
@@ -153,7 +174,7 @@ static int setup_pipelines(const options_t *opts, int rate_channel, int downsamp
         output_init(&outputs[i]);
         pipeline = &demods[i].pipeline;
 
-        pipeline->input_rate = rate_channel;
+        pipeline->input_rate = rate_in;
         pipeline->demod_rate = rate_channel;
         pipeline->output_rate = (int)opts->rate_audio;
         pipeline->downsample_factor = downsample;
@@ -173,11 +194,13 @@ static int setup_pipelines(const options_t *opts, int rate_channel, int downsamp
         /* DDS phase step for the channel-shift oscillator: mixing down
          * multiplies by e^(-j*2*pi*f_off/f_capture) per sample, so the
          * step is the negated offset as a 2^32-turn fraction; negative
-         * offsets wrap naturally through the unsigned accumulator */
-        pipeline->shift_step = (device.rate > 0)
-                                   ? (uint32_t)(int64_t)(-pipeline->frequency_offset /
-                                                         (double)device.rate * 4294967296.0)
-                                   : 0;
+         * offsets wrap naturally through the unsigned accumulator. The
+         * NCO runs on the pipeline input rate: the shared rate when the
+         * shared pre-decimation stage is engaged, else the capture rate */
+        pipeline->shift_step =
+            (rate_in > 0)
+                ? (uint32_t)(int64_t)(-pipeline->frequency_offset / (double)rate_in * 4294967296.0)
+                : 0;
 
         outputs[i].mode = ch->output_mode;
         strncpy(outputs[i].filename, ch->filename, sizeof(outputs[i].filename) - 1);
@@ -380,6 +403,8 @@ static void teardown(const options_t *opts, int file_input)
         output_cleanup(&outputs[i]);
     }
 
+    dsp_shared_cleanup(&device);
+
     if (!file_input)
         device_close();
 }
@@ -390,6 +415,8 @@ int main(int argc, char **argv)
     options_t opts;
     int file_input, record;
     int downsample = 1, rate_channel = 0;
+    uint64_t width_shared = 0;
+    int rate_in, downsample_residual;
 
     device_init_state(&device);
 
@@ -440,10 +467,20 @@ int main(int argc, char **argv)
     device.dev_index = opts.dev_index;
     device_apply_options(&opts, file_input);
 
-    if (plan_capture(&opts, file_input, &downsample, &rate_channel) < 0)
+    if (plan_capture(&opts, file_input, &downsample, &rate_channel, &width_shared) < 0)
         return EXIT_FAILURE;
 
-    if (setup_pipelines(&opts, rate_channel, downsample) < 0)
+    /* Shared pre-channelization decimation: may collapse the capture
+     * stream before the per-channel fan-out; bypass leaves the classic
+     * single-stage chain (rate_in == rate_channel, residual == total) */
+    if (dsp_shared_init(&device, (uint32_t)rate_channel, width_shared) < 0)
+        return EXIT_FAILURE;
+
+    rate_in = device.shared_rate ? (int)device.shared_rate : (int)device.rate;
+    downsample_residual =
+        device.shared_rate ? (int)(device.shared_rate / (uint32_t)rate_channel) : downsample;
+
+    if (setup_pipelines(&opts, rate_channel, downsample_residual, rate_in) < 0)
         return EXIT_FAILURE;
 
     sigact.sa_handler = sighandler;

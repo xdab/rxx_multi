@@ -83,4 +83,45 @@ void dsp_apply_dc_block(struct channel_pipeline *pipeline, struct real_buffer *b
  */
 float dsp_polar_discriminant(float complex current, float complex previous);
 
+/**
+ * @brief Set up the shared pre-channelization resampler.
+ *
+ * Collapses the capture stream to shared_rate = K * rate_channel (K the
+ * residual per-channel decimation factor) via one rational resampler
+ * (P = K, Q = capture downsample) run once before the per-channel
+ * fan-out. Engaged only when the capture rate is hardware-inflated AND
+ * the predicted per-channel saving (decimator + NCO retimed to the
+ * shared rate) exceeds the shared stage's cost at the current channel
+ * count; otherwise the device is left in bypass (shared_rate = 0) and
+ * the per-channel chain sees the capture rate unchanged.
+ *
+ * @param[out] dev Device state; receives shared_resamp, shared_rate,
+ *                 chunk_samples and the staging buffers.
+ * @param[in] rate_channel True per-channel rate (capture rate / downsample).
+ * @param[in] width_shared Occupied span plus guards [Hz]; the resampler
+ *                         passband covers half of it.
+ *
+ * @retval 0 Success.
+ * @retval -1 Resampler setup failure.
+ */
+int dsp_shared_init(struct device_state *dev, uint32_t rate_channel, uint64_t width_shared);
+
+/**
+ * @brief Push full-rate capture samples through the shared resampler.
+ *
+ * Samples are staged into Q-blocks, resampled, and appended to the
+ * shared-rate accumulator; the producer drains it into publish-sized
+ * chunks (device.chunk_samples) afterwards. No-op in bypass mode.
+ *
+ * @param[in,out] dev Device state carrying the shared stage.
+ * @param[in] in Full-rate samples (producer staging buffer), not modified.
+ * @param[in] n Number of samples in @p in.
+ */
+void dsp_shared_push(struct device_state *dev, const float complex *in, unsigned n);
+
+/**
+ * @brief Free the shared resampler object; safe to call in bypass mode.
+ */
+void dsp_shared_cleanup(struct device_state *dev);
+
 #endif /* DSP_H */

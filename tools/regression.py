@@ -32,7 +32,7 @@ from pathlib import Path
 import numpy as np
 
 sys.path.insert(0, str(Path(__file__).resolve().parent))
-from gen_scene_iq import SCENE, atofs, build_scene
+from gen_scene_iq import SCENE, atofs, build_scene, synth_channel
 
 ROOT = Path(__file__).resolve().parent.parent
 
@@ -42,6 +42,25 @@ CHANNEL_RATE_ARG, AUDIO_RATE_ARG = "24k", "48k"
 CHANNEL_RATE, AUDIO_RATE = atofs(CHANNEL_RATE_ARG), atofs(AUDIO_RATE_ARG)
 CASE_SECONDS = 2.0
 SEED, NOISE, BASE_AMP = 20261024, 0.01, 0.7
+
+# Engaged-path fixture: a wide 2M capture carrying five NBFM channels
+# packed at 12.5 kHz spacing. The classic single-stage chain decimates
+# each channel by floor(2M/12k) = 166 (1329-tap FIR per channel) while
+# the shared pre-channelization stage engages (K = 86, m = 4) and wins
+# by callgrind, so this case keeps that path honest. Every main-scene
+# case bypasses it. Channels use a small deviation so the 12.5 kHz
+# spacing keeps Carson skirts out of the neighbors' passbands.
+SHARED_RATE_ARG, SHARED_CENTER_ARG = "2M", "100M"
+SHARED_RATE, SHARED_CENTER = atofs(SHARED_RATE_ARG), atofs(SHARED_CENTER_ARG)
+SHARED_CHANNEL_RATE_ARG = "12k"
+SHARED_DEMOD_RATE = SHARED_RATE // (SHARED_RATE // 12000)
+SHARED_SCENE = [
+    (-25000, "fm", 440, 1.0, 1000),
+    (-12500, "fm", 880, 1.0, 1000),
+    (0, "fm", 1320, 1.0, 1000),
+    (12500, "fm", 1760, 1.0, 1000),
+    (25000, "fm", 2200, 1.0, 1000),
+]
 
 # The receiver never demodulates "cw" — that channel is the off-channel spur
 # every case must reject.  Expected demod rate: file mode decimates the file
@@ -71,6 +90,12 @@ class CaseFail(Exception):
 class Case:
     mod: str  # scene content label; "fsk" demodulates as -M raw
     chans: list  # (offset_hz, tone_hz, param) per channel, scene order
+    fixture: str = "scene"  # which stimulus fixture this case runs against
+    rate_arg: str = RATE_ARG
+    center_arg: str = CENTER_ARG
+    chan_rate_arg: str = CHANNEL_RATE_ARG
+    demod_rate: int = DEMOD_RATE
+    reject_tones: list = None  # tones this case's demods must reject
 
     @property
     def label(self):
@@ -78,7 +103,11 @@ class Case:
 
     @property
     def rx_mode(self):
-        return "raw" if self.mod == "fsk" else self.mod
+        if self.mod == "fsk":
+            return "raw"
+        if self.mod == "shared":
+            return "fm"  # the engaged-path fixture runs plain NBFM channels
+        return self.mod
 
 
 def build_cases():
@@ -86,13 +115,32 @@ def build_cases():
     for entry in SCENE:
         if entry[1] != "cw":
             by_mod.setdefault(entry[1], []).append((entry[0], entry[2], entry[4]))
-    return [Case(mod, chans) for mod, chans in by_mod.items()]
+    cases = [Case(mod, chans) for mod, chans in by_mod.items()]
+    cases.append(
+        Case(
+            "shared",
+            [(offset, tone, param) for offset, _, tone, _, param in SHARED_SCENE],
+            fixture="shared",
+            rate_arg=SHARED_RATE_ARG,
+            center_arg=SHARED_CENTER_ARG,
+            chan_rate_arg=SHARED_CHANNEL_RATE_ARG,
+            demod_rate=SHARED_DEMOD_RATE,
+            reject_tones=[],
+        )
+    )
+    return cases
 
 
 def scene_cache_path(seconds):
     key = repr((SCENE, RATE, CENTER, seconds, SEED, NOISE, BASE_AMP))
     digest = hashlib.blake2b(key.encode(), digest_size=5).hexdigest()
     return Path(tempfile.gettempdir()) / f"rxx_multi_scene-{digest}.cf32"
+
+
+def shared_scene_cache_path(seconds):
+    key = repr((SHARED_SCENE, SHARED_RATE, SHARED_CENTER, seconds, SEED, NOISE, BASE_AMP))
+    digest = hashlib.blake2b(key.encode(), digest_size=5).hexdigest()
+    return Path(tempfile.gettempdir()) / f"rxx_multi_shared-{digest}.cf32"
 
 
 def ensure_scene(path, seconds, regen):
@@ -104,6 +152,27 @@ def ensure_scene(path, seconds, regen):
         return
     print(f"scene: generating {path} ({expected} bytes, {seconds:g} s) ...")
     build_scene(RATE, CENTER, seconds, SEED, NOISE, BASE_AMP).astype(np.complex64).tofile(path)
+
+
+def ensure_shared_scene(path, seconds, regen):
+    """Same contract as ensure_scene for the engaged-path fixture."""
+    expected = int(SHARED_RATE * seconds) * 8
+    if not regen and path.is_file() and path.stat().st_size == expected:
+        print(f"scene: reusing cached {path}")
+        return
+    print(f"scene: generating {path} ({expected} bytes, {seconds:g} s) ...")
+    n = int(SHARED_RATE * seconds)
+    t = np.arange(n, dtype=np.float64) / SHARED_RATE
+    rng = np.random.default_rng(SEED)
+    sig = np.zeros(n, dtype=np.complex64)
+    for offset, mod, tone, level, param in SHARED_SCENE:
+        sig += synth_channel(
+            offset, mod, tone, param, BASE_AMP / len(SHARED_SCENE) * level, t, SHARED_RATE, rng
+        )
+    sig += (NOISE * rng.standard_normal(n) + 1j * NOISE * rng.standard_normal(n)).astype(
+        np.complex64
+    )
+    sig.astype(np.complex64).tofile(path)
 
 
 def load_audio(path):
@@ -138,11 +207,11 @@ def check_tone(path, tone_hz, other_tones, seconds, audio_rate):
             worst_db, worst_hz = db, other
 
     ok = abs(peak_hz - tone_hz) <= TONE_TOL_HZ and prom_db >= TONE_MIN_PROM_DB
-    ok = ok and worst_db <= REJECT_MAX_DB
-    note = (
-        f"peak {peak_hz:.1f} Hz (want {tone_hz:.0f}), prom {prom_db:.0f} dB, "
-        f"worst spur {worst_db:+.1f} dBc @{worst_hz:.0f} Hz"
-    )
+    spur = ""
+    if worst_db is not None:
+        ok = ok and worst_db <= REJECT_MAX_DB
+        spur = f", worst spur {worst_db:+.1f} dBc @{worst_hz:.0f} Hz"
+    note = f"peak {peak_hz:.1f} Hz (want {tone_hz:.0f}), prom {prom_db:.0f} dB{spur}"
     return ok, note
 
 
@@ -178,17 +247,18 @@ def run_receiver(case, scene, workdir, seconds, bin_path):
     outdir = workdir / case.label
     outdir.mkdir()
     outs = [outdir / f"ch{i + 1}.raw" for i in range(len(case.chans))]
-    freqs = ",".join(f"{CENTER + offset:.0f}" for offset, _, _ in case.chans)
+    center = atofs(case.center_arg)
+    freqs = ",".join(f"{center + offset:.0f}" for offset, _, _ in case.chans)
     cmd = [
         str(bin_path),
         "-I",
-        f"{scene}:{RATE_ARG}:{CENTER_ARG}",
+        f"{scene}:{case.rate_arg}:{case.center_arg}",
         "-f",
         freqs,
         "-M",
         case.rx_mode,
         "-s",
-        CHANNEL_RATE_ARG,
+        case.chan_rate_arg,
         "-r",
         AUDIO_RATE_ARG,
         "-O",
@@ -201,7 +271,7 @@ def run_receiver(case, scene, workdir, seconds, bin_path):
     if proc.returncode != 0 or "IQ input file exhausted" not in proc.stderr:
         raise CaseFail(f"rc={proc.returncode}, stderr tail: {proc.stderr[-400:]}", cmd)
     for p in outs:
-        rate = DEMOD_RATE * 2 if case.rx_mode == "raw" else AUDIO_RATE
+        rate = case.demod_rate * 2 if case.rx_mode == "raw" else AUDIO_RATE
         want = int(seconds * rate) * 2
         got = p.stat().st_size if p.is_file() else -1
         if abs(got - want) > want // 100:
@@ -217,19 +287,19 @@ def evaluate_channels(case, outdir, seconds):
         if case.mod == "fsk":
             ok, note = check_fsk(path, param)
         else:
-            ok, note = check_tone(
-                path, tone, [t for t in ALL_TONES if t != tone], seconds, AUDIO_RATE
-            )
+            reject = ALL_TONES if case.reject_tones is None else case.reject_tones
+            ok, note = check_tone(path, tone, [t for t in reject if t != tone], seconds, AUDIO_RATE)
         if not ok:
             raise CaseFail(f"ch{i + 1}: {note}")
         notes.append(note)
     return notes
 
 
-def ref_root(bin_path):
+def ref_root(bin_path, fixture="scene"):
     key = repr((SCENE, RATE, CENTER, SEED, NOISE, BASE_AMP))
     digest = hashlib.blake2b(key.encode(), digest_size=5).hexdigest()
-    return Path.home() / ".cache" / "rxx_multi" / "regression" / f"{bin_path.name}-{digest}"
+    suffix = "" if fixture == "scene" else f"-{fixture}"
+    return Path.home() / ".cache" / "rxx_multi" / "regression" / f"{bin_path.name}-{digest}{suffix}"
 
 
 def save_ref(outdir, dest):
@@ -285,29 +355,40 @@ def main():
     cases = [c for c in build_cases() if args.only in c.label]
     if args.list:
         for c in cases:
-            chans = ", ".join(f"{(CENTER + o) / 1e6:.3f}M@{t or p or '-'}" for o, t, p in c.chans)
+            center = atofs(c.center_arg)
+            chans = ", ".join(f"{(center + o) / 1e6:.3f}M@{t or p or '-'}" for o, t, p in c.chans)
             print(f"{c.label:>4}: {chans}")
         return 0
 
-    scene = scene_cache_path(args.seconds)
-    ensure_scene(scene, args.seconds, args.regen)
-    rdir = ref_root(bin_path)
-    if args.ref and not rdir.is_dir():
-        print(f"ERROR: no reference decode at {rdir} (run --update-ref first)", file=sys.stderr)
-        return 2
+    scenes = {
+        "scene": scene_cache_path(args.seconds),
+        "shared": shared_scene_cache_path(args.seconds),
+    }
+    ensure_scene(scenes["scene"], args.seconds, args.regen)
+    ensure_shared_scene(scenes["shared"], args.seconds, args.regen)
+    if args.ref:
+        missing = [f for f in {c.fixture for c in cases} if not ref_root(bin_path, f).is_dir()]
+        if missing:
+            print(
+                f"ERROR: no reference decode for fixture(s) {missing} (run --update-ref first)",
+                file=sys.stderr,
+            )
+            return 2
 
-    print(f"rxx_multi regression: {len(cases)} cases, bin={bin_path}, scene={scene.name}")
+    print(f"rxx_multi regression: {len(cases)} cases, bin={bin_path}, scene={scenes['scene'].name}")
     n_pass, t0 = 0, time.time()
     workdir = Path(tempfile.mkdtemp(prefix="rxx_regression_"))
     try:
         for case in cases:
             try:
-                outdir, _ = run_receiver(case, scene, workdir, args.seconds, bin_path)
+                outdir, _ = run_receiver(
+                    case, scenes[case.fixture], workdir, args.seconds, bin_path
+                )
                 notes = evaluate_channels(case, outdir, args.seconds)
                 if args.update_ref:
-                    notes.append(save_ref(outdir, rdir / case.label))
+                    notes.append(save_ref(outdir, ref_root(bin_path, case.fixture) / case.label))
                 if args.ref:
-                    notes += compare_ref(outdir, rdir / case.label)
+                    notes += compare_ref(outdir, ref_root(bin_path, case.fixture) / case.label)
             except CaseFail as fail:
                 print(f"FAIL  {case.label:<4}  {fail.note}")
                 if fail.cmd:

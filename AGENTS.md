@@ -49,7 +49,9 @@ Verification options:
 - **Regression suite (no hardware):** `python3 tools/regression.py` — builds
   the `tools/gen_scene_iq.py` deterministic multi-channel scene (cached in
   `/tmp`, generated on first use), runs one `-I` file-input case per
-  modulation (`fm/am/usb/lsb` tone checks + rejection, `raw` FSK check), and
+  modulation (`fm/am/usb/lsb` tone checks + rejection, `raw` FSK check) plus
+  a `shared` case on a clustered 2M fixture that exercises the shared
+  pre-channelization stage (all other cases bypass it), and
   exits nonzero on failure. Runs as a CI job. `--update-ref` / `--ref` add a
   bit-exact comparison against a saved reference decode for refactor gating.
 - **File input mode (`-I`)** works with no hardware: feed any CF32 recording,
@@ -72,7 +74,14 @@ Three-stage pipeline, one pthread per stage per channel:
 
 1. **Device** — backend `thread_device.c` converts hardware samples to
    `float complex` (~±128 convention) and calls `deliver_buf`, which fans
-   out to every `demods[]` (single-channel mode is the N=1 case).
+   out to every `demods[]` (single-channel mode is the N=1 case). When the
+   capture/channel oversampling ratio is high and the channels span only a
+   slice of the capture, the producer first runs one shared pre-
+   channelization decimation (`dsp_shared_init/push`, ÷2^j from the same
+   hand-rolled kernels, DC-normalized taps) and publishes shared-rate
+   chunks, halving per-channel decimation and NCO rate; the ping-pong
+   protocol is rate-agnostic. Engage rule = measured Ir cost model (see
+   `dsp.c`), never at odd ratios or when the ROI fills the capture.
    RTL delivers ~8192-pair USB chunks; RSP callbacks arrive in small dribbles
    (~1344 samples) and are accumulated into 8192-sample chunks first to
    preserve demod pacing. First ~300 ms after RSP `Init` are dropped (DC-cal

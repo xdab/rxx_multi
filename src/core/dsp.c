@@ -257,6 +257,82 @@ static int decimator_create(struct channel_pipeline *pipeline)
     return 0;
 }
 
+/* Core streaming decimator, shared by the per-channel stage and the
+ * pre-channelization shared stage: outputs land at global multiples of
+ * M (history tail + remainder carry across chunks). Returns the output
+ * count; out must hold in_len/M + 1 samples. */
+static unsigned int decim_run(
+    unsigned int M,
+    const float *taps,
+    const float *taps_pairs, /* NULL = scalar fallback */
+    float complex *tail,     /* history, tail_len = taps_len - 1 samples */
+    unsigned int tail_len,
+    unsigned int *rem, /* stream position mod M */
+    const float complex *in,
+    unsigned int in_len,
+    float complex *out)
+{
+    static _Thread_local float complex temp_out[MAXIMUM_IQ_LENGTH];
+
+    unsigned int h_len = tail_len + 1;
+    unsigned int r = *rem;
+    unsigned int out_len = (in_len + r) / M;
+    /* In-chunk offset just past the first output's window end; bumped
+     * to M when the stream sits exactly on an output boundary (that
+     * output belongs to the previous chunk). */
+    unsigned int e = ((M - r) % M == 0 ? M : (M - r) % M) - 1;
+
+    /* Output n is a causal FIR anchored at its newest input sample:
+     * window [e + n*M - h_len + 1, e + n*M] in chunk coords. In virtual
+     * coords (tail ++ samples) the window starts at e + n*M, because
+     * tail_len = h_len-1. Boundary outputs reach into the tail, the
+     * bulk sits inside the chunk. */
+    unsigned int n = 0;
+    while (n < out_len && e < tail_len)
+    {
+        unsigned int split = tail_len - e;
+
+        temp_out[n] = decim_dot(taps, tail + e, split) + decim_dot(taps + split, in, h_len - split);
+        n++;
+        e += M;
+    }
+#if defined(__AVX2__) && defined(__FMA__)
+    if (taps_pairs != NULL)
+    {
+        for (; n + 1 < out_len; n += 2, e += 2 * M)
+            decim_dot2_avx2(
+                taps,
+                taps_pairs,
+                in + e - tail_len,
+                in + e + M - tail_len,
+                h_len,
+                &temp_out[n],
+                &temp_out[n + 1]);
+        if (n < out_len)
+            temp_out[n] = decim_dot_avx2(taps, taps_pairs, in + e - tail_len, h_len);
+    }
+    else
+#endif
+    {
+        for (; n < out_len; n++, e += M)
+            temp_out[n] = decim_dot(taps, in + e - tail_len, h_len);
+    }
+
+    /* Slide the history forward by the whole chunk (unconsumed
+     * remainder included), then carry the stream position mod M. */
+    if (in_len >= tail_len)
+        memcpy(tail, in + in_len - tail_len, tail_len * sizeof(tail[0]));
+    else
+    {
+        memmove(tail, tail + in_len, (tail_len - in_len) * sizeof(tail[0]));
+        memcpy(tail + tail_len - in_len, in, in_len * sizeof(tail[0]));
+    }
+    *rem = (r + in_len) % M;
+
+    memcpy(out, temp_out, sizeof(temp_out[0]) * (size_t)out_len);
+    return out_len;
+}
+
 int dsp_decimate_channel(
     struct channel_pipeline *pipeline, const struct iq_buffer *input, struct iq_buffer *output)
 {
@@ -275,89 +351,22 @@ int dsp_decimate_channel(
         return 0;
     }
 
-    unsigned int M = (unsigned int)pipeline->downsample_factor;
-    static _Thread_local float complex temp_out[MAXIMUM_IQ_LENGTH];
-
     if (pipeline->decim_taps == NULL && decimator_create(pipeline) < 0)
     {
         output->len = 0;
         return -1;
     }
 
-    unsigned int h_len = pipeline->decim_taps_len;
-
-    unsigned int tail_len = pipeline->decimator_tail_len;
-    unsigned int r = pipeline->decim_rem;
-    unsigned int in_len = (unsigned int)input->len;
-    unsigned int out_len = (in_len + r) / M;
-    /* In-chunk offset just past the first output's window end; bumped
-     * to M when the stream sits exactly on an output boundary (that
-     * output belongs to the previous chunk). */
-    unsigned int e = ((M - r) % M == 0 ? M : (M - r) % M) - 1;
-
-    /* Output n is a causal FIR anchored at its newest input sample:
-     * window [e + n*M - h_len + 1, e + n*M] in chunk coords. In virtual
-     * coords (tail ++ samples) the window starts at e + n*M, because
-     * tail_len = h_len-1. Boundary outputs reach into the tail, the
-     * bulk sits inside the chunk. */
-    unsigned int n = 0;
-    while (n < out_len && e < tail_len)
-    {
-        unsigned int split = tail_len - e;
-
-        temp_out[n] = decim_dot(pipeline->decim_taps, pipeline->decimator_tail + e, split) +
-                      decim_dot(pipeline->decim_taps + split, input->samples, h_len - split);
-        n++;
-        e += M;
-    }
-#if defined(__AVX2__) && defined(__FMA__)
-    if (pipeline->decim_taps_pairs != NULL)
-    {
-        for (; n + 1 < out_len; n += 2, e += 2 * M)
-            decim_dot2_avx2(
-                pipeline->decim_taps,
-                pipeline->decim_taps_pairs,
-                input->samples + e - tail_len,
-                input->samples + e + M - tail_len,
-                h_len,
-                &temp_out[n],
-                &temp_out[n + 1]);
-        if (n < out_len)
-            temp_out[n] = decim_dot_avx2(
-                pipeline->decim_taps,
-                pipeline->decim_taps_pairs,
-                input->samples + e - tail_len,
-                h_len);
-    }
-    else
-#endif
-    {
-        for (; n < out_len; n++, e += M)
-            temp_out[n] = decim_dot(pipeline->decim_taps, input->samples + e - tail_len, h_len);
-    }
-
-    /* Slide the history forward by the whole chunk (unconsumed
-     * remainder included), then carry the stream position mod M. */
-    if (in_len >= tail_len)
-        memcpy(
-            pipeline->decimator_tail,
-            input->samples + in_len - tail_len,
-            tail_len * sizeof(pipeline->decimator_tail[0]));
-    else
-    {
-        memmove(
-            pipeline->decimator_tail,
-            pipeline->decimator_tail + in_len,
-            (tail_len - in_len) * sizeof(pipeline->decimator_tail[0]));
-        memcpy(
-            pipeline->decimator_tail + tail_len - in_len,
-            input->samples,
-            in_len * sizeof(pipeline->decimator_tail[0]));
-    }
-    pipeline->decim_rem = (r + in_len) % M;
-
-    memcpy(output->samples, temp_out, sizeof(temp_out[0]) * (size_t)out_len);
-    output->len = (int)out_len;
+    output->len = (int)decim_run(
+        (unsigned int)pipeline->downsample_factor,
+        pipeline->decim_taps,
+        pipeline->decim_taps_pairs,
+        pipeline->decimator_tail,
+        pipeline->decimator_tail_len,
+        &pipeline->decim_rem,
+        input->samples,
+        (unsigned int)input->len,
+        output->samples);
     return 0;
 }
 
@@ -510,4 +519,170 @@ int dsp_init_filters(struct channel_pipeline *pipeline)
         dcblock_create(pipeline) < 0)
         return -1;
     return 0;
+}
+
+/* --- shared pre-channelization decimator --- */
+
+#define SHARED_AS 35.0f
+#define SHARED_M_MIN 2u
+/* Kaiser design rule: filter length N achieves transition width
+ * df_norm ~= (As - 7.95) / (14.36 * N) relative to the rate it runs at.
+ * As = 35 dB, the per-channel prototype's class. */
+#define KAISER_NUM 27.05f
+#define KAISER_DEN 14.36f
+/* Ir cost weights, callgrind-measured on this code base: the hand-rolled
+ * AVX2 decimator runs ~1.4 Ir per tap, the NCO LUT shift ~18 Ir per
+ * sample. The shared stage costs the same per tap as the per-channel
+ * one (same kernels), so the model is apples-to-apples. */
+#define IR_DECIM_TAP 1.4
+#define IR_NCO_SAMPLE 18.0
+
+/* NOLINTBEGIN(bugprone-easily-swappable-parameters): positional contract */
+int dsp_shared_init(struct device_state *dev, uint32_t rate_channel, uint64_t width_shared)
+/* NOLINTEND(bugprone-easily-swappable-parameters) */
+{
+    dev->shared_taps = NULL;
+    dev->shared_taps_pairs = NULL;
+    dev->shared_tail_len = 0;
+    dev->shared_rem = 0;
+    dev->shared_factor = 1;
+    dev->shared_rate = 0;
+    dev->shared_acc_len = 0;
+
+    if (rate_channel == 0 || dev->rate == 0)
+        return 0;
+
+    unsigned int ds = dev->rate / rate_channel;
+
+    /* Largest power-of-two factor of ds whose shared rate still keeps
+     * the ROI (2*roi) strictly below its own Nyquist: the shared output
+     * must carry every channel intact. */
+    double roi2 = (double)width_shared;
+    unsigned int j = 0;
+    while (j < 8 && (ds & ((2u << j) - 1)) == 0 && (double)(dev->rate >> (j + 1)) > roi2)
+        j++;
+    if (j == 0)
+        return 0; /* odd downsample, or channels span too much of the capture */
+
+    unsigned int M_sh = 1u << j;
+    unsigned int K = ds >> j; /* per-channel residual decimation */
+    uint32_t shared = dev->rate >> j;
+    double gap = (double)shared - roi2; /* room for the transition */
+    if (gap <= 0.0)
+        return 0;
+
+    /* Shared kaiser, same family as the per-channel prototype but with
+     * the passband at the ROI edge: everything the shared decimation
+     * folds (k*shared +- roi zones and beyond) must be in its stopband,
+     * so the transition must fit between roi and shared - roi. */
+    unsigned int h_len_min =
+        (unsigned int)ceil(KAISER_NUM * (double)dev->rate / (KAISER_DEN * gap));
+    unsigned int m_sh = (h_len_min - 1) / (2 * M_sh) + 1;
+    if (m_sh < SHARED_M_MIN)
+        m_sh = SHARED_M_MIN;
+    unsigned int h_len = 2 * m_sh * M_sh + 1;
+    /* cutoff midway between the passband edge and the stopband edge */
+    float fc = (float)(0.5 * (double)shared / (double)dev->rate);
+
+    /* Engage only when the predicted per-channel saving (decimator taps
+     * halved per stage + NCO retimed to the shared rate) beats the
+     * shared stage's own cost at this channel count. */
+    double save = IR_NCO_SAMPLE * (double)(dev->rate - shared) +
+                  IR_DECIM_TAP * (double)(8 * (ds - K)) * rate_channel;
+    double cost = IR_DECIM_TAP * (double)h_len / (double)M_sh * (double)dev->rate;
+    if ((double)freq_len * save <= cost)
+        return 0;
+
+    dev->shared_taps = malloc(h_len * sizeof(float));
+    if (dev->shared_taps == NULL)
+    {
+        fprintf(stderr, "Failed to allocate %u shared decimator taps\n", h_len);
+        return -1;
+    }
+    liquid_firdes_kaiser(h_len, fc, SHARED_AS, 0.0f, dev->shared_taps);
+    /* Normalize DC gain to 1: the per-channel prototype keeps its
+     * unnormalized convention (compensated by output_scale), and with
+     * the shared stage at unity gain the amplitude math is bit-identical
+     * to the bypassed path. */
+    double hs = 0.0;
+    for (unsigned int i = 0; i < h_len; i++)
+        hs += dev->shared_taps[i];
+    for (unsigned int i = 0; i < h_len; i++)
+        dev->shared_taps[i] /= (float)hs;
+    dev->shared_taps_len = h_len;
+    dev->shared_tail_len = h_len - 1;
+    memset(dev->shared_tail, 0, sizeof(dev->shared_tail));
+    dev->shared_rem = 0;
+    dev->shared_factor = M_sh;
+
+#if defined(__AVX2__) && defined(__FMA__)
+    dev->shared_taps_pairs = malloc(2 * h_len * sizeof(float));
+    if (dev->shared_taps_pairs != NULL)
+    {
+        for (unsigned int p = 0; 4 * p + 3 < h_len; p++)
+        {
+            for (int r = 0; r < 2; r++)
+                dev->shared_taps_pairs[8 * p + r] = dev->shared_taps[4 * p];
+            for (int r = 0; r < 2; r++)
+                dev->shared_taps_pairs[8 * p + 2 + r] = dev->shared_taps[4 * p + 1];
+            for (int r = 0; r < 2; r++)
+                dev->shared_taps_pairs[8 * p + 4 + r] = dev->shared_taps[4 * p + 2];
+            for (int r = 0; r < 2; r++)
+                dev->shared_taps_pairs[8 * p + 6 + r] = dev->shared_taps[4 * p + 3];
+        }
+    }
+#endif
+
+    /* Constant chunk duration: the producer's full-rate chunk yields
+     * chunk_samples at the shared rate, so condvar pacing stays at the
+     * reference wakeup rate */
+    dev->chunk_samples = (DEFAULT_BUF_LENGTH / 2) >> j;
+    dev->shared_rate = shared;
+
+    fprintf(
+        stderr,
+        "Shared decimator: %u -> %u Hz (1/%u, %u taps, chunk %u samples)\n",
+        dev->rate,
+        shared,
+        M_sh,
+        h_len,
+        dev->chunk_samples);
+    return 0;
+}
+
+void dsp_shared_push(struct device_state *dev, const float complex *in, unsigned n)
+{
+    static _Thread_local float complex tmp[MAXIMUM_IQ_LENGTH];
+
+    if (dev->shared_taps == NULL || n == 0)
+        return;
+
+    unsigned int out_len = decim_run(
+        dev->shared_factor,
+        dev->shared_taps,
+        dev->shared_taps_pairs,
+        dev->shared_tail,
+        dev->shared_tail_len,
+        &dev->shared_rem,
+        in,
+        n,
+        tmp);
+    if (dev->shared_acc_len + out_len > DEFAULT_BUF_LENGTH)
+    {
+        /* Cannot happen with producer-sized pushes (acc is drained
+         * below chunk_samples before every push); drop rather than
+         * overflow if that invariant is ever broken */
+        fprintf(stderr, "ERROR: shared accumulator overflow, dropping output\n");
+        return;
+    }
+    memcpy(dev->shared_acc + dev->shared_acc_len, tmp, out_len * sizeof(tmp[0]));
+    dev->shared_acc_len += out_len;
+}
+
+void dsp_shared_cleanup(struct device_state *dev)
+{
+    free(dev->shared_taps);
+    dev->shared_taps = NULL;
+    free(dev->shared_taps_pairs);
+    dev->shared_taps_pairs = NULL;
 }

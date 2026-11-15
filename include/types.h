@@ -176,6 +176,26 @@ struct device_state
     char input_path[STATIC_STRING_SIZE];  /* -I: play this file instead of hardware */
     char record_path[STATIC_STRING_SIZE]; /* -R: record capture to this file */
     FILE *record_file;                    /* open while recording; NULL = recording off */
+    /* Shared pre-channelization decimator (dsp_shared_init): the same
+     * hand-rolled decimator the per-channel pipelines use, run ONCE
+     * with a power-of-two factor to collapse the capture stream to
+     * shared_rate before the fan-out, so the per-channel NCO + decimator
+     * run at the low rate. Taps are DC-normalized (the per-channel ones
+     * are not), so amplitude conventions are unchanged. NULL when
+     * bypassed (shared_rate == 0); producer-thread only. */
+    float *shared_taps;       /* kaiser prototype, shared_taps_len taps */
+    float *shared_taps_pairs; /* AVX2 lane-pair broadcast, or NULL */
+    unsigned int shared_taps_len;
+    float complex shared_tail[2048]; /* decimator history, as channel_pipeline */
+    unsigned int shared_tail_len;
+    unsigned int shared_rem;    /* stream position mod shared_factor */
+    unsigned int shared_factor; /* power-of-two decimation 2^j */
+    uint32_t shared_rate;       /* post-shared-stage rate; 0 = bypass */
+    unsigned chunk_samples;     /* shared-rate samples per published chunk */
+    /* Producer-side staging (producer-thread only): shared-rate outputs
+     * waiting to fill a publish chunk. */
+    float complex shared_acc[DEFAULT_BUF_LENGTH];
+    unsigned shared_acc_len;
 };
 
 /**

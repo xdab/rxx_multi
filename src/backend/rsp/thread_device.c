@@ -1,4 +1,5 @@
 #include "device.h"
+#include "dsp.h"
 #include "output.h"
 #include "thread.h"
 #include "types.h"
@@ -105,19 +106,57 @@ static void wait_demods_drained(struct device_state *s)
  * chunk by index in slots[k & 1]. Bump chunk_seq BEFORE signalling:
  * the demod predicate is level-based on the counter, so a signal that
  * races or coalesces can never lose a chunk; the mutex handoff in the
- * signal makes the slot contents visible. */
+ * signal makes the slot contents visible. Recording is done by the
+ * producer before this point (full-rate staging, pre-shared-decimation). */
 static void deliver_buf(struct device_state *s, struct iq_buffer *slot)
 {
+    (void)slot; /* chunk index protocol: contents already in slots[k & 1] */
     if (do_exit)
         return;
-
-    if (s->record_file)
-        record_chunk(s, slot);
 
     s->chunk_seq++;
 
     for (int i = 0; i < freq_len; i++)
         safe_cond_signal(&demods[i].ready, &demods[i].ready_m);
+}
+
+/* Drain the shared-rate accumulator into publish-sized chunks (constant
+ * chunk duration, see dsp_shared_init). Each publish acquires its own
+ * fill slot; the callback's staging slot stays acquired as scratch
+ * until its next flush (chunk_seq has not moved past it). */
+static void publish_shared(struct device_state *s)
+{
+    while (s->shared_acc_len >= s->chunk_samples)
+    {
+        struct iq_buffer *slot = acquire_fill_slot(s);
+        if (!slot)
+            return;
+
+        memcpy(slot->samples, s->shared_acc, s->chunk_samples * sizeof(slot->samples[0]));
+        slot->len = (int)s->chunk_samples;
+        memmove(
+            s->shared_acc,
+            s->shared_acc + s->chunk_samples,
+            (s->shared_acc_len - s->chunk_samples) * sizeof(s->shared_acc[0]));
+        s->shared_acc_len -= s->chunk_samples;
+
+        deliver_buf(s, slot);
+    }
+}
+
+/* EOF flush: publish whatever the shared accumulator still holds as a
+ * short final chunk (the demod chains accept any chunk length) */
+static void publish_shared_flush(struct device_state *s)
+{
+    if (s->shared_acc_len == 0)
+        return;
+    struct iq_buffer *slot = acquire_fill_slot(s);
+    if (!slot)
+        return;
+    memcpy(slot->samples, s->shared_acc, s->shared_acc_len * sizeof(slot->samples[0]));
+    slot->len = (int)s->shared_acc_len;
+    s->shared_acc_len = 0;
+    deliver_buf(s, slot);
 }
 
 /* Drop the first ~300 ms after Init: DC-offset calibration transient */
@@ -192,8 +231,30 @@ static void sdrplay_stream_cb(
         if (buf_pending >= CHUNK_SAMPLES)
         {
             fill->len = (int)buf_pending;
-            deliver_buf(s, fill);
-            fill = NULL;
+
+            /* Record before the shared stage: -R always captures the
+             * raw full-rate capture stream, whatever the shared stage
+             * does */
+            if (s->record_file)
+                record_chunk(s, fill);
+
+            if (s->shared_taps)
+            {
+                /* The held slot doubles as full-rate staging;
+                 * dsp_shared_push only reads it, then the drained
+                 * shared-rate chunks are published through the same
+                 * ping-pong. The staging slot is released: once chunk_seq
+                 * has moved, the next dribble must re-acquire instead of
+                 * overwriting a published chunk. */
+                dsp_shared_push(s, fill->samples, buf_pending);
+                publish_shared(s);
+                fill = NULL;
+            }
+            else
+            {
+                deliver_buf(s, fill);
+                fill = NULL;
+            }
             buf_pending = 0;
         }
     }
@@ -281,8 +342,18 @@ void *file_input_thread_fn(void *arg)
             slot->samples[i] = raw[i] * 128.0f;
         slot->len = (int)got;
 
-        deliver_buf(s, slot);
+        if (s->shared_taps)
+        {
+            dsp_shared_push(s, slot->samples, (unsigned)got);
+            publish_shared(s);
+        }
+        else
+            deliver_buf(s, slot);
     }
+
+    /* Flush the shared accumulator's tail as a short final chunk */
+    if (s->shared_taps)
+        publish_shared_flush(s);
 
     fclose(f);
 
