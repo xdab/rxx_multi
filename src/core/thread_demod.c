@@ -5,7 +5,6 @@
 #include <math.h>
 #include <pthread.h>
 #include <stdint.h>
-#include <unistd.h>
 
 static int16_t float_to_pcm16(float sample)
 {

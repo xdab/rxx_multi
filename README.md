@@ -72,6 +72,43 @@ sudo make install
 Each binary links only its own hardware library; building the RTL binary
 needs no SDRplay installation and vice versa.
 
+## Windows (MSYS2 UCRT64)
+
+Build with the [MSYS2](https://www.msys2.org/) UCRT64 toolchain:
+
+```bash
+pacman -S make mingw-w64-ucrt-x86_64-gcc mingw-w64-ucrt-x86_64-cmake \
+          mingw-w64-ucrt-x86_64-rtl-sdr mingw-w64-ucrt-x86_64-fftw
+```
+
+Liquid-DSP is not packaged for MSYS2 — build it static once (the
+`patches/` file carries the two UCRT fixes, `strsep` and `getrusage`):
+
+```bash
+curl -sL https://github.com/jgaeddert/liquid-dsp/archive/refs/tags/v1.8.3.tar.gz -o /tmp/liquid.tar.gz
+tar xzf /tmp/liquid.tar.gz -C /tmp
+patch -d /tmp/liquid-dsp-1.8.3 -p1 < patches/liquid-dsp-1.8.3-mingw.patch
+cmake -S /tmp/liquid-dsp-1.8.3 -B /tmp/liquid-dsp-1.8.3/build -G "MSYS Makefiles" \
+      -DCMAKE_BUILD_TYPE=Release -DBUILD_STATIC_LIBS=ON -DBUILD_SHARED_LIBS=OFF \
+      -DBUILD_EXAMPLES=OFF -DBUILD_AUTOTESTS=OFF -DBUILD_BENCHMARKS=OFF \
+      -DCMAKE_INSTALL_PREFIX=/ucrt64
+cmake --build /tmp/liquid-dsp-1.8.3/build -j4
+cmake --install /tmp/liquid-dsp-1.8.3/build
+```
+
+Then `make` as on Linux. For the RSP backend, the SDRplay API is a system
+install (not a pacman package); its location is anchored by
+`SDRPLAY_HOME`, which defaults to `C:/Program Files/SDRplay/API`.
+
+`make all` also stages the runtime DLLs beside the binaries (`dlls`
+target: `librtlsdr`, `libusb-1.0`, `libwinpthread`; derived from each
+image's import table, so the set self-adjusts). Static liquid means the
+resulting `bin/` runs standalone — no toolchain on `PATH` needed.
+`sdrplay_api.dll` is deliberately not staged: its EULA grants no
+redistribution, so RSP users install the SDRplay API themselves. CI runs
+the same shape as a `windows-build` job: UCRT64 build + the regression
+suite from `bin/`.
+
 ## Usage
 
 Single channel:

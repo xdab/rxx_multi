@@ -16,6 +16,7 @@
 #include <time.h>
 #include <unistd.h>
 
+#include "compat.h"
 #include "demod.h"
 #include "device.h"
 #include "dsp.h"
@@ -33,9 +34,13 @@ volatile int do_exit = 0;
 static void sighandler(int signum)
 {
     (void)signum;
+#ifndef _WIN32 /* SIGPIPE is never raised on Windows */
     signal(SIGPIPE, SIG_IGN);
+#endif
+    // NOLINTNEXTLINE(bugprone-signal-handler,cert-msc54-cpp,cert-sig30-c): rtl_fm-heritage notify, do_exit is the only effect that matters
     fprintf(stderr, "Signal caught, exiting!\n");
     do_exit = 1;
+    // NOLINTNEXTLINE(bugprone-signal-handler,cert-msc54-cpp,cert-sig30-c): backend cancel_async / no-op in file mode
     device_signal_exit();
 }
 
@@ -411,7 +416,9 @@ static void teardown(const options_t *opts, int file_input)
 
 int main(int argc, char **argv)
 {
+#ifndef _WIN32
     struct sigaction sigact;
+#endif
     options_t opts;
     int file_input, record;
     int downsample = 1, rate_channel = 0;
@@ -419,6 +426,11 @@ int main(int argc, char **argv)
     int rate_in, downsample_residual;
 
     device_init_state(&device);
+
+    /* sample streams crossing stdout must not suffer text-mode translation
+     * (no-op on POSIX); Winsock needs its own startup (no-op on POSIX) */
+    stdio_binary();
+    net_init();
 
     if (options_parse(argc, argv, &opts) != 0)
         return EXIT_FAILURE;
@@ -483,6 +495,12 @@ int main(int argc, char **argv)
     if (setup_pipelines(&opts, rate_channel, downsample_residual, rate_in) < 0)
         return EXIT_FAILURE;
 
+#ifdef _WIN32
+    /* mingw has no sigaction(); signal() covers SIGINT/SIGTERM console
+     * delivery. SIGPIPE/SIGQUIT are never raised there. */
+    signal(SIGINT, sighandler);
+    signal(SIGTERM, sighandler);
+#else
     sigact.sa_handler = sighandler;
     sigemptyset(&sigact.sa_mask);
     sigact.sa_flags = 0;
@@ -490,6 +508,7 @@ int main(int argc, char **argv)
     sigaction(SIGTERM, &sigact, NULL);
     sigaction(SIGQUIT, &sigact, NULL);
     sigaction(SIGPIPE, &sigact, NULL);
+#endif
 
     if (file_input)
         bringup_file_input(&opts);
@@ -501,5 +520,6 @@ int main(int argc, char **argv)
 
     supervise(&opts, file_input);
     teardown(&opts, file_input);
+    net_cleanup();
     return EXIT_SUCCESS;
 }

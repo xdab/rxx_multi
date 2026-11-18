@@ -32,6 +32,13 @@ CheckOptions:
   # // NOLINT(misc-include-cleaner) sits on the include line.
   - key: misc-include-cleaner.IgnoreHeaders
     value: 'bits/.*'
+  # mingw/UCRT64: the same walk-up problem — symbols land in CRT/Winsock
+  # internals (ws2def.h, ws2ipdef.h, psdk_inc/*, corecrt*.h,
+  # pthread_time.h) that no
+  # one includes directly; the public providers (compat.h, winsock2.h,
+  # time.h) already satisfy the check on POSIX
+  - key: misc-include-cleaner.IgnoreHeaders
+    value: 'ws2def.h;ws2ipdef.h;ws2tcpip.h;psdk_inc/.*;inaddr.h;_timeval.h;corecrt.*;pthread_time.h;winsock2.h;windows.h'
 # Check-wide disables, each with its reason:
 #
 # bugprone-signed-bitwise: the DSP bit-packs and masks on `int` (C integer

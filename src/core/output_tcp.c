@@ -1,21 +1,11 @@
+#include "compat.h"
 #include "output.h"
 #include "types.h"
-#include <arpa/inet.h>
-#include <asm-generic/errno-base.h>
-#include <asm-generic/errno.h>
-#include <asm-generic/socket.h>
-#include <errno.h>
-#include <netinet/in.h>
-#include <netinet/tcp.h>
 #include <pthread.h>
 #include <stdint.h>
 #include <stdio.h>
 #include <stdlib.h>
 #include <string.h>
-#include <sys/select.h>
-#include <sys/socket.h>
-#include <sys/types.h>
-#include <unistd.h>
 
 int tcp_init(struct output_state *s, int port)
 {
@@ -28,7 +18,7 @@ int tcp_init(struct output_state *s, int port)
     pthread_mutex_init(&s->net.tcp.clients_m, NULL);
 
     /* Create listening socket */
-    s->net.tcp.listen_fd = socket(AF_INET, SOCK_STREAM, 0);
+    s->net.tcp.listen_fd = (int)socket(AF_INET, SOCK_STREAM, 0);
     if (s->net.tcp.listen_fd < 0)
     {
         fprintf(stderr, "TCP: socket() failed: %s\n", strerror(errno));
@@ -36,10 +26,10 @@ int tcp_init(struct output_state *s, int port)
     }
 
     /* Allow address reuse for quick restarts */
-    if (setsockopt(s->net.tcp.listen_fd, SOL_SOCKET, SO_REUSEADDR, &reuse, sizeof(reuse)) < 0)
+    if (net_setsockopt(s->net.tcp.listen_fd, SOL_SOCKET, SO_REUSEADDR, &reuse, sizeof(reuse)) < 0)
     {
         fprintf(stderr, "TCP: setsockopt(SO_REUSEADDR) failed: %s\n", strerror(errno));
-        close(s->net.tcp.listen_fd);
+        net_close(s->net.tcp.listen_fd);
         return -1;
     }
 
@@ -53,7 +43,7 @@ int tcp_init(struct output_state *s, int port)
     if (bind(s->net.tcp.listen_fd, (struct sockaddr *)&addr, sizeof(addr)) < 0)
     {
         fprintf(stderr, "TCP: bind() failed on port %d: %s\n", port, strerror(errno));
-        close(s->net.tcp.listen_fd);
+        net_close(s->net.tcp.listen_fd);
         return -1;
     }
 
@@ -61,7 +51,7 @@ int tcp_init(struct output_state *s, int port)
     if (listen(s->net.tcp.listen_fd, 5) < 0)
     {
         fprintf(stderr, "TCP: listen() failed: %s\n", strerror(errno));
-        close(s->net.tcp.listen_fd);
+        net_close(s->net.tcp.listen_fd);
         return -1;
     }
 
@@ -108,18 +98,18 @@ void tcp_accept_clients(struct output_state *s)
             return; /* No connection pending or error */
 
         /* Accept the connection */
-        int fd = accept(s->net.tcp.listen_fd, (struct sockaddr *)&client_addr, &client_len);
+        int fd = (int)accept(s->net.tcp.listen_fd, (struct sockaddr *)&client_addr, &client_len);
 
         if (fd < 0)
         {
-            if (errno != EWOULDBLOCK && errno != EAGAIN)
+            if (net_errno() != EWOULDBLOCK && net_errno() != EAGAIN)
                 fprintf(stderr, "TCP: accept() failed: %s\n", strerror(errno));
             return;
         }
 
         /* Disable Nagle (send immediately for real-time audio) */
         int nodelay = 1;
-        setsockopt(fd, IPPROTO_TCP, TCP_NODELAY, &nodelay, sizeof(nodelay));
+        net_setsockopt(fd, IPPROTO_TCP, TCP_NODELAY, &nodelay, sizeof(nodelay));
 
         /* Store client socket */
         pthread_mutex_lock(&s->net.tcp.clients_m);
@@ -145,7 +135,7 @@ void tcp_remove_client(struct output_state *s, int client_slot)
 
     if (s->net.tcp.client_fd[client_slot] >= 0)
     {
-        close(s->net.tcp.client_fd[client_slot]);
+        net_close(s->net.tcp.client_fd[client_slot]);
         s->net.tcp.client_fd[client_slot] = -1;
         s->net.tcp.client_count--;
         fprintf(
@@ -180,14 +170,14 @@ void tcp_broadcast(struct output_state *s, int16_t *samples, int count)
             continue; /* Empty slot */
 
         /* Send data to this client (MSG_NOSIGNAL prevents SIGPIPE on disconnect) */
-        ssize_t sent = send(fd, samples, data_len, MSG_NOSIGNAL);
+        ssize_t sent = net_send(fd, samples, data_len, MSG_NOSIGNAL);
 
         if (sent < 0)
         {
-            if (errno == EPIPE || errno == ECONNRESET)
+            if (net_errno() == EPIPE || net_errno() == ECONNRESET)
             {
                 /* Client disconnected, mark for removal */
-                close(fd);
+                net_close(fd);
                 s->net.tcp.client_fd[i] = -1;
                 s->net.tcp.client_count--;
                 fprintf(stderr, "TCP: client [%d] lost (total: %d)\n", i, s->net.tcp.client_count);
@@ -198,7 +188,7 @@ void tcp_broadcast(struct output_state *s, int16_t *samples, int count)
         else if ((size_t)sent < data_len)
         {
             /* Partial send - client buffer full, disconnect */
-            close(fd);
+            net_close(fd);
             s->net.tcp.client_fd[i] = -1;
             s->net.tcp.client_count--;
             fprintf(
@@ -221,7 +211,7 @@ void tcp_close(struct output_state *s)
     {
         if (s->net.tcp.client_fd[i] >= 0)
         {
-            close(s->net.tcp.client_fd[i]);
+            net_close(s->net.tcp.client_fd[i]);
             s->net.tcp.client_fd[i] = -1;
         }
     }
@@ -232,7 +222,7 @@ void tcp_close(struct output_state *s)
     /* Close listening socket */
     if (s->net.tcp.listen_fd >= 0)
     {
-        close(s->net.tcp.listen_fd);
+        net_close(s->net.tcp.listen_fd);
         s->net.tcp.listen_fd = -1;
     }
 

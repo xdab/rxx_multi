@@ -8,7 +8,6 @@
 #include <stdio.h>
 #include <string.h>
 #include <time.h>
-#include <unistd.h>
 
 /* RTL-SDR delivers ~8192-pair USB chunks (~125x/s at 2M), matching the
  * condvar pacing the demod pipeline expects. */

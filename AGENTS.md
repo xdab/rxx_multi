@@ -15,7 +15,8 @@ README.md for features, installation, and usage.
 - `include/` — shared headers: `types.h` (structs, constants, externs),
   `options.h` (`channel_t`, `options_t`, backend option hooks),
   `device.h` (backend interface + `capture_plan`), `pipeline.h`, `demod.h`,
-  `dsp.h`, `output.h`, `thread.h` (thread fns, `safe_cond_signal` macro).
+  `dsp.h`, `output.h`, `thread.h` (thread fns, `safe_cond_signal` macro),
+  `compat.h` (Windows shims: Winsock sockets, binary stdio; no-ops on POSIX).
 - `src/core/` — backend-independent code: `main.c`, `options.c`,
   `pipeline.c`, `demod.c` (FM/AM/USB/LSB/raw), `dsp.c`
   (shift/decimate/resample/filters), `thread_demod.c`, `thread_output.c`,
@@ -35,6 +36,12 @@ make rtl        # only RTL-SDR binary
 make rsp        # only RSP binary
 make clean
 ```
+
+**Windows** (MSYS2 UCRT64, see README for the liquid-dsp build): same
+targets; `make all` additionally stages runtime DLLs into `bin/` (`dlls`
+target, import-table-derived). `-I` accepts Windows drive-letter paths
+(`C:\capture.cf32:2M:100M`). Platform shims live in `include/compat.h` —
+keep POSIX code paths untouched under `#else`.
 
 Style and static-analysis gates (all three run in CI, pinned to LLVM 23.1.3
 via pip): `make fmt` reformats C via clang-format and `tools/*.py` via ruff

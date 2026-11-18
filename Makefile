@@ -30,8 +30,47 @@ rsp_LIBS := -lsdrplay_api
 rtl_TARGET := $(BIN_DIR)/rtl_multi$(TARGET_SUFFIX)
 rsp_TARGET := $(BIN_DIR)/rsp_multi$(TARGET_SUFFIX)
 
+# `all` must stay the first non-special rule (the default goal): the Windows
+# block below defines `dlls`, which would otherwise silently become what bare
+# `make` runs. ALL_EXTRA is resolved here, before the block appends to it.
+WIN_FLAVOR := $(findstring Windows_NT,$(OS))$(findstring _NT,$(shell uname -s 2>/dev/null))
+ALL_EXTRA :=
+ifneq ($(WIN_FLAVOR),)
+ALL_EXTRA := dlls
+endif
 .PHONY: all
-all: $(BACKENDS)
+all: $(BACKENDS) $(ALL_EXTRA)
+
+# Windows (UCRT64): the SDRplay API is a system install, not a pacman package
+ifneq ($(WIN_FLAVOR),)
+# pin make's own sh: a foreign MSYS flavor in PATH (e.g. Git Bash) mounts /ucrt64 elsewhere
+SHELL := /bin/sh
+# make strips TMP/TEMP from recipe environments; mingw gcc resolves its
+# scratch dir via GetTempPath() (TMP, TEMP, USERPROFILE) and dies with
+# "Cannot create temporary file in C:\windows\" without them
+export TMP := $(TMP)
+export TEMP := $(TEMP)
+LIBS_COMMON += -lws2_32
+SDRPLAY_HOME ?= "C:/Program Files/SDRplay/API"
+CFLAGS += -I$(SDRPLAY_HOME)/inc
+rsp_LIBS += -L$(SDRPLAY_HOME)/x64
+
+# stage every import-table DLL that exists in the toolchain bin beside the
+# binaries (DLL search starts there); two passes close the chain one level
+# down. System DLLs and the non-redistributable sdrplay_api.dll drop out on
+# the existence check.
+GCC_ROOT := $(shell LC_ALL=C $(CC) -print-search-dirs 2>/dev/null | tr -d '\r' | sed -n '/^install: /{s|^install: ||;s|/lib/gcc/.*||;s|/bin/\.\.||;p}')
+UCRT64_BIN ?= $(GCC_ROOT)/bin
+DLL_IMPORTS := sed -n 's/[[:space:]]*DLL Name: //p'
+STAGE_DLLS = while read dll; do [ -f $(UCRT64_BIN)/$$dll ] && echo $(UCRT64_BIN)/$$dll; done | sort -u | xargs -r cp -t $(BIN_DIR)/
+
+.PHONY: dlls
+dlls: | $(BIN_DIR)
+	@rm -f $(BIN_DIR)/*.dll
+	@for f in $(BIN_DIR)/*.exe; do [ -f $$f ] && objdump -p $$f; done | $(DLL_IMPORTS) | sort -u | $(STAGE_DLLS)
+	@for f in $(BIN_DIR)/*.dll; do [ -f $$f ] && objdump -p $$f; done | $(DLL_IMPORTS) | sort -u | $(STAGE_DLLS)
+	@echo "✓ runtime DLLs staged in $(BIN_DIR)/"
+endif
 
 # Create necessary directories
 $(OBJ_DIR) $(BIN_DIR):
@@ -135,18 +174,21 @@ fmt-check:
 COMPDB := compile_commands.json
 TIDY_SRCS := $(CORE_SRC) $(wildcard src/backend/rtl/*.c)
 
+# native Windows clang tools need a Windows-form directory (msys CURDIR is not)
+WIN_CURDIR := $(if $(WIN_FLAVOR),$(shell cygpath -m $(CURDIR)),$(CURDIR))
+
 .PHONY: compdb
 compdb:
 	@: > $(COMPDB); echo '[' >> $(COMPDB)
 	@q='\"'; \
 	for src in $(TIDY_SRCS); do \
-		{ printf '{"directory": "%s", "file": "%s", "arguments": ["%s"' "$(CURDIR)" "$$src" "$(CC)"; \
+		{ printf '{"directory": "%s", "file": "%s", "arguments": ["%s"' "$(WIN_CURDIR)" "$$src" "$(CC)"; \
 		  for fl in $(CFLAGS); do printf ', "%s"' "$$fl"; done; \
 		  printf ', "-DAPP_NAME=%srtl_multi%s"' "$$q" "$$q"; \
 		  printf ', "-c", "%s"]},\n' "$$src"; } >> $(COMPDB); \
 	done
 	@for src in $(wildcard src/backend/rsp/*.c); do \
-		{ printf '{"directory": "%s", "file": "%s", "arguments": ["%s"' "$(CURDIR)" "$$src" "$(CC)"; \
+		{ printf '{"directory": "%s", "file": "%s", "arguments": ["%s"' "$(WIN_CURDIR)" "$$src" "$(CC)"; \
 		  for fl in $(CFLAGS); do printf ', "%s"' "$$fl"; done; \
 		  printf ', "-DAPP_NAME=%srsp_multi%s"' "$$q" "$$q"; \
 		  printf ', "-c", "%s"]},\n' "$$src"; } >> $(COMPDB); \
@@ -172,6 +214,7 @@ help:
 	@echo "  all         - Build all backends (default: BACKENDS=rtl rsp)"
 	@echo "  rtl         - Build bin/rtl_multi (librtlsdr)"
 	@echo "  rsp         - Build bin/rsp_multi (SDRplay API v3)"
+	@echo "  dlls        - Stage runtime DLLs in bin/ (Windows only)"
 	@echo "  profile     - Build bin/*.prof with debug symbols (valgrind/callgrind)"
 	@echo "  clean       - Remove build artifacts (obj/, bin/)"
 	@echo "  doc         - Generate API docs with doxygen"

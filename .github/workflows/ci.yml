@@ -40,6 +40,41 @@ jobs:
       - name: Regression suite
         run: python3 tools/regression.py
 
+  windows-build:
+    # Windows portability proof: UCRT64 build + the regression gate run from
+    # bin/ with the toolchain off PATH — the zipped-bin distribution shape.
+    # liquid is not packaged for MSYS2: build it static first (the patches/
+    # file carries the two UCRT fixes strsep/getrusage). RTL only, same scope
+    # rationale as build-rtl.
+    runs-on: windows-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: msys2/setup-msys2@v2
+        with:
+          msystem: UCRT64
+          update: true
+          install: make patch mingw-w64-ucrt-x86_64-gcc mingw-w64-ucrt-x86_64-cmake mingw-w64-ucrt-x86_64-rtl-sdr
+      - name: Build liquid-dsp
+        shell: msys2 {0}
+        run: |
+          curl -sL https://github.com/jgaeddert/liquid-dsp/archive/refs/tags/v1.8.3.tar.gz -o /tmp/liquid.tar.gz
+          tar xzf /tmp/liquid.tar.gz -C /tmp
+          patch -d /tmp/liquid-dsp-1.8.3 -p1 < patches/liquid-dsp-1.8.3-mingw.patch
+          cmake -S /tmp/liquid-dsp-1.8.3 -B /tmp/liquid-dsp-1.8.3/build -G "MSYS Makefiles" \
+            -DCMAKE_BUILD_TYPE=Release -DBUILD_STATIC_LIBS=ON -DBUILD_SHARED_LIBS=OFF \
+            -DBUILD_EXAMPLES=OFF -DBUILD_AUTOTESTS=OFF -DBUILD_BENCHMARKS=OFF \
+            -DCMAKE_INSTALL_PREFIX=/ucrt64
+          cmake --build /tmp/liquid-dsp-1.8.3/build -j4
+          cmake --install /tmp/liquid-dsp-1.8.3/build
+      - name: Build rtl_multi
+        shell: msys2 {0}
+        run: make rtl dlls
+      - name: Regression suite
+        shell: pwsh
+        run: |
+          python -m pip install numpy
+          python tools/regression.py --bin bin/rtl_multi.exe
+
   fmt-check:
     runs-on: ubuntu-latest
     steps:

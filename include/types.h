@@ -19,11 +19,11 @@
 
 #include <complex.h>
 #include <liquid/liquid.h>
-#include <netinet/in.h>
 #include <pthread.h>
 #include <stdint.h>
 #include <stdio.h>
-#include <sys/socket.h>
+
+#include "compat.h"
 
 /* Constants */
 #define WBFM_SAMPLE_RATE 170000

@@ -5,6 +5,7 @@
  * operation is channel_count = 1 with channels[0].
  */
 
+#include <ctype.h>
 #include <getopt.h> // NOLINT(misc-include-cleaner): getopt_long/optarg are GNU, not in the POSIX headers
 #include <stdint.h>
 #include <stdio.h>
@@ -139,7 +140,13 @@ static int parse_input_option(options_t *opts, const char *arg)
     strncpy(buf, arg, sizeof(buf) - 1);
     buf[sizeof(buf) - 1] = '\0';
 
-    rate_str = strchr(buf, ':');
+    /* a Windows drive letter ("C:\capture.cf32") carries a colon before the
+     * FILE:RATE separator */
+    const char *scan = buf;
+    if ((buf[0] && buf[1] == ':') && isalpha((unsigned char)buf[0]))
+        scan = buf + 2;
+
+    rate_str = strchr(scan, ':');
     if (!rate_str)
     {
         fprintf(stderr, "Invalid IQ input format, use -I FILE:RATE:CENTER\n");
@@ -489,7 +496,7 @@ int options_parse(int argc, char **argv, options_t *opts)
                 for (int i = 0; i < val_count; i++)
                 {
                     const char *val = get_value_at(optarg, i);
-                    char val_copy[64];
+                    char val_copy[STATIC_STRING_SIZE];
                     strncpy(val_copy, val, sizeof(val_copy) - 1);
                     val_copy[sizeof(val_copy) - 1] = '\0';
                     if (parse_output_option(&opts->channels[i], val_copy) < 0)
