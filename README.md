@@ -109,6 +109,16 @@ redistribution, so RSP users install the SDRplay API themselves. CI runs
 the same shape as a `windows-build` job: UCRT64 build + the regression
 suite from `bin/`.
 
+### Windows GUI launcher (opt-in)
+
+Command lines not your thing? `make gui` builds `bin/rxx_gui.exe` (plain
+Win32, not part of `make all`) — a small launcher that expresses the options
+as form controls: pick the backend, add/edit/remove channels (frequency,
+modulation, TCP/UDP/file output), set gains and rates, then Launch. It runs
+the same `bin/*_multi.exe` binaries, shows their log output in a pane, and
+minimizes to the tray while they run. `make gui-test` runs the unit tests
+for the options→command-line mapping (pure C, runs on Linux too).
+
 ## Usage
 
 Single channel:

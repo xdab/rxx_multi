@@ -26,6 +26,9 @@ README.md for features, installation, and usage.
 - `src/backend/rsp/` — `device.c` (SDRplay API v3 lifecycle, gRdB/LNA/AGC,
   rate snap), `thread_device.c` (stream/event callbacks, rechunking,
   `-I` file playback), private prototypes declared locally, not in `include/`.
+- `src/gui/` — Windows-only opt-in GUI launcher (`make gui`, not in `all`):
+  `args_mapper.{h,c}` is the pure, unit-tested UI-options → command-line
+  mapping (`make gui-test`); `main.c` is the Win32 front end that consumes it.
 - `tools/e2e_capture.py` — manual E2E test (RSP backend only, see below).
 
 ## Build & test
@@ -34,6 +37,8 @@ README.md for features, installation, and usage.
 make            # both binaries: bin/rtl_multi, bin/rsp_multi
 make rtl        # only RTL-SDR binary
 make rsp        # only RSP binary
+make gui        # opt-in Windows GUI launcher (Windows/MSYS2 only)
+make gui-test   # GUI arg-mapper unit tests (any platform)
 make clean
 ```
 

@@ -106,6 +106,21 @@ $(eval $(call BACKEND_RULES,rsp,rsp_multi))
 rtl: $(rtl_TARGET)
 rsp: $(rsp_TARGET)
 
+# Opt-in Windows GUI launcher (not part of `all`); plain Win32, links
+# against the default MinGW import libs, no new dependencies
+ifneq ($(WIN_FLAVOR),)
+.PHONY: gui
+gui: src/gui/main.c src/gui/shell.c src/gui/args_mapper.c | $(BIN_DIR)
+	$(CC) $(CFLAGS) -mwindows src/gui/main.c src/gui/shell.c src/gui/args_mapper.c -o $(BIN_DIR)/rxx_gui.exe -lcomdlg32 -lcomctl32
+	@echo "✓ Build successful: $(BIN_DIR)/rxx_gui.exe"
+endif
+
+# GUI arg-mapper unit tests (pure C, no Win32, runs anywhere)
+.PHONY: gui-test
+gui-test: src/gui/args_mapper.c src/gui/args_mapper_test.c | $(BIN_DIR)
+	$(CC) $(CFLAGS) src/gui/args_mapper.c src/gui/args_mapper_test.c -o $(BIN_DIR)/rxx_gui_test$(TARGET_SUFFIX)
+	$(BIN_DIR)/rxx_gui_test$(TARGET_SUFFIX)
+
 # Profiling builds (valgrind/callgrind); do not touch obj/ or bin/ builds
 .PHONY: profile profile-rtl profile-rsp
 profile: profile-rtl profile-rsp
@@ -144,7 +159,7 @@ doc:
 # Style: C via clang-format (src/, include/), tools/*.py via ruff (config in
 # pyproject.toml). fmt-check is the gate counterpart — it exits nonzero on any
 # finding, so it can sit in CI or a pre-commit hook.
-C_SOURCES := $(wildcard src/core/*.c) $(wildcard src/backend/*/*.c) $(wildcard include/*.h)
+C_SOURCES := $(wildcard src/core/*.c) $(wildcard src/backend/*/*.c) $(wildcard src/gui/*.c) $(wildcard include/*.h)
 PY_SOURCES := $(wildcard tools/*.py)
 
 .PHONY: fmt
@@ -214,6 +229,8 @@ help:
 	@echo "  all         - Build all backends (default: BACKENDS=rtl rsp)"
 	@echo "  rtl         - Build bin/rtl_multi (librtlsdr)"
 	@echo "  rsp         - Build bin/rsp_multi (SDRplay API v3)"
+	@echo "  gui         - Build the opt-in Windows GUI launcher (bin/rxx_gui.exe)"
+	@echo "  gui-test    - Build and run the GUI arg-mapper unit tests"
 	@echo "  dlls        - Stage runtime DLLs in bin/ (Windows only)"
 	@echo "  profile     - Build bin/*.prof with debug symbols (valgrind/callgrind)"
 	@echo "  clean       - Remove build artifacts (obj/, bin/)"
