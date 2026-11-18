@@ -3,11 +3,12 @@
  * @brief rxx_gui — Windows launcher UI for rxx_multi.
  *
  * Tabbed layout: the "Channels" tab holds the working set (channel list,
- * editor, live command-line preview); the "Device and input" tab holds the
- * set-once settings. A persistent bottom bar carries status + Launch/Stop.
- * All state maps to a backend command line through args_mapper.h; Launch/
- * Stop manage the backend child process. Generic Win32 plumbing lives in
- * shell.c.
+ * editor, live command-line preview); the "Source" tab holds the input
+ * selection and its relevant settings. All controls are declared in tables
+ * and positioned by the shell.c flow-layout engine; is_visible() is the
+ * single source of truth for what shows, so visibility toggles reflow
+ * automatically. All state maps to a backend command line through
+ * args_mapper.h; Launch/Stop manage the backend child process.
  */
 #include <windows.h>
 #include <windowsx.h>
@@ -22,70 +23,97 @@
 /** @brief Child control / command IDs. */
 enum
 {
+    /* chrome */
     IDC_TAB = 100,
-    IDC_BACKEND,
-    IDC_DEVICE,
-    IDC_RATE_IN,
-    IDC_RATE_OUT,
-    IDC_TIMEOUT,
-    IDC_DC,
-    IDC_DEEMP,
-    IDC_RTL_GAIN,
-    IDC_RTL_GAIN_L,
-    IDC_RTL_PPM,
-    IDC_RTL_PPM_L,
-    IDC_BIASTEE,
-    IDC_DIRECT,
-    IDC_DIRECT_L,
-    IDC_RSP_GRDB,
-    IDC_RSP_GRDB_L,
-    IDC_RSP_LNA,
-    IDC_RSP_LNA_L,
-    IDC_RSP_NOTE,
-    IDC_SRC_DEVICE,
-    IDC_SRC_FILE,
-    IDC_FILE_PATH,
-    IDC_FILE_BROWSE,
-    IDC_FILE_RATE,
-    IDC_FILE_CENTER,
-    IDC_RECORD_PATH,
-    IDC_RECORD_BROWSE,
+    IDC_STATUSLINE,
+    IDC_LAUNCH,
+    IDC_STOP,
+
+    /* channels page */
     IDC_CH_LIST,
+    IDC_PREVIEW_L,
+    IDC_PREVIEW,
+    IDC_CH_FREQ_L,
     IDC_CH_FREQ,
+    IDC_CH_MODE_L,
     IDC_CH_MODE,
+    IDC_CH_OUT_L,
     IDC_CH_OUT,
-    IDC_CH_LBL1,
-    IDC_CH_FLD1,
-    IDC_CH_LBL2,
-    IDC_CH_FLD2,
+    IDC_CH_TCP_L,
+    IDC_CH_TCP_PORT,
+    IDC_CH_UDP_HOST_L,
+    IDC_CH_UDP_HOST,
+    IDC_CH_UDP_PORT_L,
+    IDC_CH_UDP_PORT,
+    IDC_CH_FILE_L,
+    IDC_CH_FILE,
+    IDC_CH_FILE_BROWSE,
     IDC_CH_ADD,
     IDC_CH_UPDATE,
     IDC_CH_REMOVE,
-    IDC_LAUNCH,
-    IDC_STOP,
-    IDC_PREVIEW,
-    IDC_STATUSLINE,
-    IDC_STATUS, /* dummy ID for labels that need no handle */
-    IDC_COUNT
+
+    /* source page */
+    IDC_GRP_SOURCE,
+    IDC_BACKEND,
+    IDC_DEVICE_L,
+    IDC_DEVICE,
+    IDC_DEVICE_HINT,
+    IDC_FILE_PATH_L,
+    IDC_FILE_PATH,
+    IDC_FILE_BROWSE,
+    IDC_FILE_RATE_L,
+    IDC_FILE_RATE,
+    IDC_FILE_CENTER_L,
+    IDC_FILE_CENTER,
+    IDC_GRP_RATES,
+    IDC_RATE_IN_L,
+    IDC_RATE_IN,
+    IDC_RATE_OUT_L,
+    IDC_RATE_OUT,
+    IDC_TIMEOUT_L,
+    IDC_TIMEOUT,
+    IDC_DC,
+    IDC_DEEMP,
+    IDC_GRP_RX,
+    IDC_RTL_GAIN_L,
+    IDC_RTL_GAIN,
+    IDC_RTL_PPM_L,
+    IDC_RTL_PPM,
+    IDC_BIASTEE,
+    IDC_DIRECT_L,
+    IDC_DIRECT,
+    IDC_RSP_GRDB_L,
+    IDC_RSP_GRDB,
+    IDC_RSP_LNA_L,
+    IDC_RSP_LNA,
+    IDC_RSP_NOTE,
+    IDC_GRP_RECORD,
+    IDC_RECORD_L,
+    IDC_RECORD_PATH,
+    IDC_RECORD_BROWSE
 };
 
 /** @brief Tab pages. */
 enum
 {
     PAGE_CHANNELS = 0,
-    PAGE_DEVICE = 1
+    PAGE_SOURCE = 1
 };
 
-static void sync_backend(void);
-static void sync_input_source(void);
-static void load_edit_fields(void);
+/** @brief Source selector entries (the IDC_BACKEND combo). */
+enum
+{
+    GUI_SRC_RTL = 0,
+    GUI_SRC_RSP = 1,
+    GUI_SRC_FILE = 2
+};
 
 /** @brief Main window handle (owner for dialogs, target for notifications). */
 static HWND g_main;
 /** @brief Channel list master state (the -f/-M/-O lists, positional). */
 static gui_channel_t g_channels[GUI_MAX_CHANNELS];
 static int g_chan_count;
-/** @brief Working copy of the channel currently in the editor pane. */
+/** @brief Channel currently loaded in the editor pane. */
 static gui_channel_t g_edit;
 /** @brief Running child process state. */
 static PROCESS_INFORMATION g_pi;
@@ -94,17 +122,45 @@ static int g_running;
 #define WM_CHILD_EXIT (WM_APP + 1)
 
 /* ------------------------------------------------------------------ */
-/* Live preview + status                                               */
+/* State <-> controls                                                  */
 /* ------------------------------------------------------------------ */
 
 /** @brief Set the one-line status text. */
 static void set_status(const char *s) { shell_text_set(IDC_STATUSLINE, s); }
 
+/** @brief Read the channel editor into g_edit (all output fields). */
+static void editor_to_edit(void)
+{
+    shell_text_get(IDC_CH_FREQ, g_edit.freq, sizeof(g_edit.freq));
+    g_edit.mode = (gui_mode_t)shell_combo_sel(IDC_CH_MODE);
+    g_edit.output = (gui_output_type_t)shell_combo_sel(IDC_CH_OUT);
+    shell_text_get(IDC_CH_TCP_PORT, g_edit.tcp_port, sizeof(g_edit.tcp_port));
+    shell_text_get(IDC_CH_UDP_HOST, g_edit.udp_host, sizeof(g_edit.udp_host));
+    shell_text_get(IDC_CH_UDP_PORT, g_edit.udp_port, sizeof(g_edit.udp_port));
+    shell_text_get(IDC_CH_FILE, g_edit.file_name, sizeof(g_edit.file_name));
+}
+
+/** @brief Fill the channel editor from g_edit. */
+static void load_editor(void)
+{
+    shell_text_set(IDC_CH_FREQ, g_edit.freq);
+    ComboBox_SetCurSel(shell_hwnd(IDC_CH_MODE), g_edit.mode);
+    ComboBox_SetCurSel(shell_hwnd(IDC_CH_OUT), g_edit.output);
+    shell_text_set(IDC_CH_TCP_PORT, g_edit.tcp_port);
+    shell_text_set(IDC_CH_UDP_HOST, g_edit.udp_host);
+    shell_text_set(IDC_CH_UDP_PORT, g_edit.udp_port);
+    shell_text_set(IDC_CH_FILE, g_edit.file_name);
+}
+
 /** @brief Copy every control's value into a launch-options struct. */
 static void collect_options(gui_launch_options_t *o)
 {
     memset(o, 0, sizeof(*o));
-    o->backend = (gui_backend_t)shell_combo_sel(IDC_BACKEND);
+    int src = shell_combo_sel(IDC_BACKEND);
+    if (src < 0)
+        src = GUI_SRC_RTL;
+    o->backend = src == GUI_SRC_RSP ? GUI_BACKEND_RSP : GUI_BACKEND_RTL;
+    o->use_file_input = src == GUI_SRC_FILE;
     shell_text_get(IDC_DEVICE, o->device, sizeof(o->device));
     shell_text_get(IDC_RATE_IN, o->rate_in, sizeof(o->rate_in));
     shell_text_get(IDC_RATE_OUT, o->rate_out, sizeof(o->rate_out));
@@ -117,7 +173,6 @@ static void collect_options(gui_launch_options_t *o)
     o->rtl_direct = shell_combo_sel(IDC_DIRECT);
     shell_text_get(IDC_RSP_GRDB, o->rsp_grdb, sizeof(o->rsp_grdb));
     shell_text_get(IDC_RSP_LNA, o->rsp_lna, sizeof(o->rsp_lna));
-    o->use_file_input = shell_checked(IDC_SRC_FILE);
     shell_text_get(IDC_FILE_PATH, o->file_path, sizeof(o->file_path));
     shell_text_get(IDC_FILE_RATE, o->file_rate, sizeof(o->file_rate));
     shell_text_get(IDC_FILE_CENTER, o->file_center, sizeof(o->file_center));
@@ -141,84 +196,288 @@ static int refresh_preview(void)
 }
 
 /* ------------------------------------------------------------------ */
-/* Channel editor state                                                */
+/* Layout: control table, visibility rules, section flow               */
 /* ------------------------------------------------------------------ */
 
-/** @brief Show the flag set matching the selected backend. */
-static void sync_backend(void)
-{
-    int rtl = shell_combo_sel(IDC_BACKEND) == GUI_BACKEND_RTL;
-    shell_show_ids(
-        rtl,
-        7,
-        IDC_RTL_GAIN,
-        IDC_RTL_GAIN_L,
-        IDC_RTL_PPM,
-        IDC_RTL_PPM_L,
-        IDC_BIASTEE,
-        IDC_DIRECT,
-        IDC_DIRECT_L);
-    shell_show_ids(!rtl, 5, IDC_RSP_GRDB, IDC_RSP_GRDB_L, IDC_RSP_LNA, IDC_RSP_LNA_L, IDC_RSP_NOTE);
-}
+#define EDIT_ST (WS_BORDER | ES_AUTOHSCROLL | WS_TABSTOP)
 
-/** @brief Enable file-input fields only when the IQ-file radio is picked. */
-static void sync_input_source(void)
-{
-    int file = shell_checked(IDC_SRC_FILE);
-    shell_enable_ids(file, 4, IDC_FILE_PATH, IDC_FILE_BROWSE, IDC_FILE_RATE, IDC_FILE_CENTER);
-}
+/** @brief Every control in the window; geometry is layout input, not position. */
+static const shell_ctl_t k_ctls[] = {
+    /* chrome */
+    {IDC_TAB, -1, WC_TABCONTROL, NULL, WS_CLIPSIBLINGS, 668, 400},
+    {IDC_STATUSLINE, -1, "STATIC", "Ready", 0, 470, 16},
+    {IDC_LAUNCH, -1, "BUTTON", "Launch", BS_DEFPUSHBUTTON | WS_TABSTOP, 80, 28},
+    {IDC_STOP, -1, "BUTTON", "Stop", BS_PUSHBUTTON | WS_TABSTOP, 80, 28},
 
-/** @brief Save the visible dynamic editor fields into g_edit. */
-static void stash_edit_fields(void)
+    /* channels page */
+    {IDC_CH_LIST,
+     0,
+     "LISTBOX",
+     NULL,
+     WS_BORDER | WS_VSCROLL | LBS_NOTIFY | LBS_HASSTRINGS,
+     330,
+     314},
+    {IDC_PREVIEW_L, 0, "STATIC", "Command line", 0, 100, 16},
+    {IDC_PREVIEW,
+     0,
+     "EDIT",
+     NULL,
+     WS_BORDER | WS_VSCROLL | ES_READONLY | ES_MULTILINE | ES_AUTOVSCROLL,
+     330,
+     60},
+    {IDC_CH_FREQ_L, 0, "STATIC", "Frequency", 0, 60, 16},
+    {IDC_CH_FREQ, 0, "EDIT", NULL, EDIT_ST, 150, 22},
+    {IDC_CH_MODE_L, 0, "STATIC", "Mode", 0, 60, 16},
+    {IDC_CH_MODE, 0, "COMBOBOX", NULL, CBS_DROPDOWNLIST | WS_TABSTOP, 150, 20},
+    {IDC_CH_OUT_L, 0, "STATIC", "Output", 0, 60, 16},
+    {IDC_CH_OUT, 0, "COMBOBOX", NULL, CBS_DROPDOWNLIST | WS_TABSTOP, 150, 20},
+    {IDC_CH_TCP_L, 0, "STATIC", "TCP port", 0, 60, 16},
+    {IDC_CH_TCP_PORT, 0, "EDIT", NULL, EDIT_ST, 150, 22},
+    {IDC_CH_UDP_HOST_L, 0, "STATIC", "UDP host", 0, 60, 16},
+    {IDC_CH_UDP_HOST, 0, "EDIT", NULL, EDIT_ST, 150, 22},
+    {IDC_CH_UDP_PORT_L, 0, "STATIC", "UDP port", 0, 60, 16},
+    {IDC_CH_UDP_PORT, 0, "EDIT", NULL, EDIT_ST, 150, 22},
+    {IDC_CH_FILE_L, 0, "STATIC", "File", 0, 30, 16},
+    {IDC_CH_FILE, 0, "EDIT", NULL, EDIT_ST, 160, 22},
+    {IDC_CH_FILE_BROWSE, 0, "BUTTON", "...", BS_PUSHBUTTON | WS_TABSTOP, 40, 28},
+    {IDC_CH_ADD, 0, "BUTTON", "Add", BS_PUSHBUTTON | WS_TABSTOP, 70, 28},
+    {IDC_CH_UPDATE, 0, "BUTTON", "Update", BS_PUSHBUTTON | WS_TABSTOP, 70, 28},
+    {IDC_CH_REMOVE, 0, "BUTTON", "Remove", BS_PUSHBUTTON | WS_TABSTOP, 70, 28},
+
+    /* source page */
+    {IDC_GRP_SOURCE, 1, "BUTTON", "Source", BS_GROUPBOX, 632, 0},
+    {IDC_BACKEND, 1, "COMBOBOX", NULL, CBS_DROPDOWNLIST | WS_TABSTOP, 240, 20},
+    {IDC_DEVICE_L, 1, "STATIC", "Device (-d)", 0, 68, 16},
+    {IDC_DEVICE, 1, "EDIT", NULL, EDIT_ST, 110, 22},
+    {IDC_DEVICE_HINT, 1, "STATIC", "(blank = first device)", 0, 150, 16},
+    {IDC_FILE_PATH_L, 1, "STATIC", "File", 0, 30, 16},
+    {IDC_FILE_PATH, 1, "EDIT", NULL, EDIT_ST, 260, 22},
+    {IDC_FILE_BROWSE, 1, "BUTTON", "Browse...", BS_PUSHBUTTON | WS_TABSTOP, 62, 28},
+    {IDC_FILE_RATE_L, 1, "STATIC", "Rate:", 0, 34, 16},
+    {IDC_FILE_RATE, 1, "EDIT", NULL, EDIT_ST, 60, 22},
+    {IDC_FILE_CENTER_L, 1, "STATIC", "Center:", 0, 44, 16},
+    {IDC_FILE_CENTER, 1, "EDIT", NULL, EDIT_ST, 80, 22},
+
+    {IDC_GRP_RATES, 1, "BUTTON", "Rates and filters", BS_GROUPBOX, 632, 0},
+    {IDC_RATE_IN_L, 1, "STATIC", "Capture rate (-s)", 0, 100, 16},
+    {IDC_RATE_IN, 1, "EDIT", NULL, EDIT_ST, 80, 22},
+    {IDC_RATE_OUT_L, 1, "STATIC", "Audio rate (-r)", 0, 90, 16},
+    {IDC_RATE_OUT, 1, "EDIT", NULL, EDIT_ST, 80, 22},
+    {IDC_TIMEOUT_L, 1, "STATIC", "Timeout s (-x)", 0, 86, 16},
+    {IDC_TIMEOUT, 1, "EDIT", NULL, EDIT_ST, 50, 22},
+    {IDC_DC, 1, "BUTTON", "DC block", BS_AUTOCHECKBOX | WS_TABSTOP, 80, 20},
+    {IDC_DEEMP, 1, "BUTTON", "De-emphasis", BS_AUTOCHECKBOX | WS_TABSTOP, 95, 20},
+
+    {IDC_GRP_RX, 1, "BUTTON", "Receiver settings", BS_GROUPBOX, 632, 0},
+    {IDC_RTL_GAIN_L, 1, "STATIC", "Gain dB (-g)", 0, 70, 16},
+    {IDC_RTL_GAIN, 1, "EDIT", NULL, EDIT_ST | ES_NUMBER, 70, 22},
+    {IDC_RTL_PPM_L, 1, "STATIC", "PPM (-p)", 0, 52, 16},
+    {IDC_RTL_PPM, 1, "EDIT", NULL, EDIT_ST | ES_NUMBER, 50, 22},
+    {IDC_BIASTEE, 1, "BUTTON", "Bias-T (-T)", BS_AUTOCHECKBOX | WS_TABSTOP, 80, 20},
+    {IDC_DIRECT_L, 1, "STATIC", "Direct sampling", 0, 90, 16},
+    {IDC_DIRECT, 1, "COMBOBOX", NULL, CBS_DROPDOWNLIST | WS_TABSTOP, 140, 20},
+    {IDC_RSP_GRDB_L, 1, "STATIC", "gRdB 0-59 (-g)", 0, 90, 16},
+    {IDC_RSP_GRDB, 1, "EDIT", NULL, EDIT_ST | ES_NUMBER, 60, 22},
+    {IDC_RSP_LNA_L, 1, "STATIC", "LNA state 0-2 (-L)", 0, 106, 16},
+    {IDC_RSP_LNA, 1, "EDIT", NULL, EDIT_ST | ES_NUMBER, 50, 22},
+    {IDC_RSP_NOTE, 1, "STATIC", "(blank gain = API AGC)", 0, 150, 16},
+
+    {IDC_GRP_RECORD, 1, "BUTTON", "Record raw IQ (-R)", BS_GROUPBOX, 632, 0},
+    {IDC_RECORD_L, 1, "STATIC", "CF32 file (blank = off)", 0, 130, 16},
+    {IDC_RECORD_PATH, 1, "EDIT", NULL, EDIT_ST, 380, 22},
+    {IDC_RECORD_BROWSE, 1, "BUTTON", "Browse...", BS_PUSHBUTTON | WS_TABSTOP, 62, 28},
+};
+
+/* Row/section builders for the layout table; parenthesized compound
+ * literals so nested commas survive macro argument splitting */
+#define IT(id, w) {id, w}
+#define ROW(...)                                                                                   \
+    {                                                                                              \
+        .items = (const shell_item_t[]) { __VA_ARGS__, {0, 0} }                                    \
+    }
+#define ROWS(...)                                                                                  \
+    (const shell_row_t[])                                                                          \
+    {                                                                                              \
+        __VA_ARGS__, { .items = NULL }                                                             \
+    }
+#define GROUP(id, title, x, w, rows_) {id, title, 0, x, w, rows_}
+#define PLAIN(col, x, w, rows_) {0, NULL, col, x, w, rows_}
+
+/** @brief Section flow: which sections exist, in what column, in what order. */
+static const shell_group_t k_groups[] = {
+    /* channels page, left: list + preview */
+    PLAIN(
+        0,
+        24,
+        330,
+        ROWS(ROW(IT(IDC_CH_LIST, 0)), ROW(IT(IDC_PREVIEW_L, 0)), ROW(IT(IDC_PREVIEW, 0)))),
+    /* channels page, right: editor */
+    PLAIN(
+        1,
+        380,
+        252,
+        ROWS(
+            ROW(IT(IDC_CH_FREQ_L, 0), IT(IDC_CH_FREQ, -1)),
+            ROW(IT(IDC_CH_MODE_L, 0), IT(IDC_CH_MODE, -1)),
+            ROW(IT(IDC_CH_OUT_L, 0), IT(IDC_CH_OUT, -1)),
+            ROW(IT(IDC_CH_TCP_L, 0), IT(IDC_CH_TCP_PORT, -1)),
+            ROW(IT(IDC_CH_UDP_HOST_L, 0), IT(IDC_CH_UDP_HOST, -1)),
+            ROW(IT(IDC_CH_UDP_PORT_L, 0), IT(IDC_CH_UDP_PORT, -1)),
+            ROW(IT(IDC_CH_FILE_L, 0), IT(IDC_CH_FILE, -1), IT(IDC_CH_FILE_BROWSE, 0)),
+            ROW(IT(IDC_CH_ADD, 0), IT(IDC_CH_UPDATE, 0), IT(IDC_CH_REMOVE, 0)))),
+    /* source page */
+    GROUP(
+        IDC_GRP_SOURCE,
+        "Source",
+        24,
+        632,
+        ROWS(
+            ROW(IT(IDC_BACKEND, 240)),
+            ROW(IT(IDC_DEVICE_L, 0), IT(IDC_DEVICE, 0), IT(IDC_DEVICE_HINT, -1)),
+            ROW(IT(IDC_FILE_PATH_L, 0), IT(IDC_FILE_PATH, -1), IT(IDC_FILE_BROWSE, 0)),
+            ROW(IT(IDC_FILE_RATE_L, 0),
+                IT(IDC_FILE_RATE, 0),
+                IT(IDC_FILE_CENTER_L, 0),
+                IT(IDC_FILE_CENTER, 0)))),
+    GROUP(
+        IDC_GRP_RATES,
+        "Rates and filters",
+        24,
+        632,
+        ROWS(
+            ROW(IT(IDC_RATE_IN_L, 0),
+                IT(IDC_RATE_IN, 0),
+                IT(IDC_RATE_OUT_L, 0),
+                IT(IDC_RATE_OUT, 0),
+                IT(IDC_TIMEOUT_L, 0),
+                IT(IDC_TIMEOUT, 0)),
+            ROW(IT(IDC_DC, 0), IT(IDC_DEEMP, 0)))),
+    GROUP(
+        IDC_GRP_RX,
+        "Receiver settings",
+        24,
+        632,
+        ROWS(
+            ROW(IT(IDC_RTL_GAIN_L, 0),
+                IT(IDC_RTL_GAIN, 0),
+                IT(IDC_RTL_PPM_L, 0),
+                IT(IDC_RTL_PPM, 0),
+                IT(IDC_BIASTEE, 0),
+                IT(IDC_DIRECT_L, 0),
+                IT(IDC_DIRECT, -1)),
+            ROW(IT(IDC_RSP_GRDB_L, 0),
+                IT(IDC_RSP_GRDB, 0),
+                IT(IDC_RSP_LNA_L, 0),
+                IT(IDC_RSP_LNA, 0),
+                IT(IDC_RSP_NOTE, -1)))),
+    GROUP(
+        IDC_GRP_RECORD,
+        "Record raw IQ (-R)",
+        24,
+        632,
+        ROWS(ROW(IT(IDC_RECORD_L, 0), IT(IDC_RECORD_PATH, -1), IT(IDC_RECORD_BROWSE, 0)))),
+};
+
+#define K_GROUPS_N (sizeof(k_groups) / sizeof(k_groups[0]))
+
+/**
+ * @brief The single source of truth for control visibility; the layout
+ * engine reflows (never overlaps) whatever this returns.
+ */
+static int is_visible(int id)
 {
-    switch (g_edit.output)
+    int src = shell_combo_sel(IDC_BACKEND);
+    if (src < 0)
+        src = GUI_SRC_RTL;
+    int file = src == GUI_SRC_FILE, rtl = src == GUI_SRC_RTL;
+    switch (id)
     {
-    case GUI_OUT_TCP:
-        shell_text_get(IDC_CH_FLD1, g_edit.tcp_port, sizeof(g_edit.tcp_port));
-        break;
-    case GUI_OUT_UDP:
-        shell_text_get(IDC_CH_FLD1, g_edit.udp_host, sizeof(g_edit.udp_host));
-        shell_text_get(IDC_CH_FLD2, g_edit.udp_port, sizeof(g_edit.udp_port));
-        break;
-    case GUI_OUT_FILE:
-        shell_text_get(IDC_CH_FLD1, g_edit.file_name, sizeof(g_edit.file_name));
-        break;
+    /* file replay has no hardware: hide device select, gains, capture rate */
+    case IDC_DEVICE_L:
+    case IDC_DEVICE:
+    case IDC_DEVICE_HINT:
+    case IDC_GRP_RX:
+    case IDC_RATE_IN_L:
+    case IDC_RATE_IN:
+        return !file;
+    case IDC_RTL_GAIN_L:
+    case IDC_RTL_GAIN:
+    case IDC_RTL_PPM_L:
+    case IDC_RTL_PPM:
+    case IDC_BIASTEE:
+    case IDC_DIRECT_L:
+    case IDC_DIRECT:
+        return !file && rtl;
+    case IDC_RSP_GRDB_L:
+    case IDC_RSP_GRDB:
+    case IDC_RSP_LNA_L:
+    case IDC_RSP_LNA:
+    case IDC_RSP_NOTE:
+        return !file && !rtl;
+    case IDC_FILE_PATH_L:
+    case IDC_FILE_PATH:
+    case IDC_FILE_BROWSE:
+    case IDC_FILE_RATE_L:
+    case IDC_FILE_RATE:
+    case IDC_FILE_CENTER_L:
+    case IDC_FILE_CENTER:
+        return file;
+
+    /* channel editor: fields of the selected output type */
+    case IDC_CH_TCP_L:
+    case IDC_CH_TCP_PORT:
+        return g_edit.output == GUI_OUT_TCP;
+    case IDC_CH_UDP_HOST_L:
+    case IDC_CH_UDP_HOST:
+    case IDC_CH_UDP_PORT_L:
+    case IDC_CH_UDP_PORT:
+        return g_edit.output == GUI_OUT_UDP;
+    case IDC_CH_FILE_L:
+    case IDC_CH_FILE:
+    case IDC_CH_FILE_BROWSE:
+        return g_edit.output == GUI_OUT_FILE;
+    default:
+        return 1;
     }
 }
 
-/** @brief Show the dynamic editor fields for g_edit's output type. */
-static void load_edit_fields(void)
+/** @brief Re-run the layout and size the tab, bottom bar, and window to it. */
+static void relayout(void)
 {
-    switch (g_edit.output)
-    {
-    case GUI_OUT_TCP:
-        shell_text_set(IDC_CH_LBL1, "TCP port");
-        shell_text_set(IDC_CH_FLD1, g_edit.tcp_port);
-        shell_show_ids(0, 2, IDC_CH_LBL2, IDC_CH_FLD2);
-        break;
-    case GUI_OUT_UDP:
-        shell_text_set(IDC_CH_LBL1, "UDP host");
-        shell_text_set(IDC_CH_FLD1, g_edit.udp_host);
-        shell_text_set(IDC_CH_LBL2, "UDP port");
-        shell_text_set(IDC_CH_FLD2, g_edit.udp_port);
-        shell_show_ids(1, 2, IDC_CH_LBL2, IDC_CH_FLD2);
-        break;
-    case GUI_OUT_FILE:
-        shell_text_set(IDC_CH_LBL1, "File");
-        shell_text_set(IDC_CH_FLD1, g_edit.file_name);
-        shell_show_ids(0, 2, IDC_CH_LBL2, IDC_CH_FLD2);
-        break;
-    }
+    int page = TabCtrl_GetCurSel(shell_hwnd(IDC_TAB));
+    if (page < 0)
+        page = PAGE_CHANNELS;
+    int bottom = shell_layout(g_main, page, k_groups, (int)K_GROUPS_N, is_visible);
+
+    SetWindowPos(
+        shell_hwnd(IDC_TAB),
+        NULL,
+        0,
+        0,
+        668,
+        bottom + 14,
+        SWP_NOMOVE | SWP_NOZORDER | SWP_NOACTIVATE);
+    int bar_y = 6 + bottom + 14 + 12;
+    MoveWindow(shell_hwnd(IDC_STATUSLINE), 14, bar_y + 6, 470, 16, TRUE);
+    MoveWindow(shell_hwnd(IDC_LAUNCH), 500, bar_y, 80, 28, TRUE);
+    MoveWindow(shell_hwnd(IDC_STOP), 590, bar_y, 80, 28, TRUE);
+
+    DWORD style = WS_OVERLAPPED | WS_CAPTION | WS_SYSMENU | WS_MINIMIZEBOX;
+    RECT r = {0, 0, 680, bar_y + 28 + 12};
+    AdjustWindowRect(&r, style, FALSE);
+    SetWindowPos(
+        g_main,
+        NULL,
+        0,
+        0,
+        r.right - r.left,
+        r.bottom - r.top,
+        SWP_NOMOVE | SWP_NOZORDER | SWP_NOACTIVATE);
 }
 
-/** @brief Read freq/mode/output + dynamic fields from the editor into g_edit. */
-static void editor_to_edit(void)
-{
-    shell_text_get(IDC_CH_FREQ, g_edit.freq, sizeof(g_edit.freq));
-    g_edit.mode = (gui_mode_t)shell_combo_sel(IDC_CH_MODE);
-    g_edit.output = (gui_output_type_t)shell_combo_sel(IDC_CH_OUT);
-    stash_edit_fields();
-}
+/* ------------------------------------------------------------------ */
+/* Channel list                                                        */
+/* ------------------------------------------------------------------ */
 
 /** @brief Human-readable list entry for channel i. */
 static void channel_label(int i, char *buf, size_t n)
@@ -254,29 +513,11 @@ static void reload_channel_list(int select)
 /** @brief Load channel i into the editor pane. */
 static void select_channel(int i)
 {
-    stash_edit_fields();
     if (i < 0 || i >= g_chan_count)
         return;
     g_edit = g_channels[i];
-    shell_text_set(IDC_CH_FREQ, g_edit.freq);
-    ComboBox_SetCurSel(shell_hwnd(IDC_CH_MODE), g_edit.mode);
-    ComboBox_SetCurSel(shell_hwnd(IDC_CH_OUT), g_edit.output);
-    load_edit_fields();
-}
-
-/** @brief Switch tab page, then re-apply that page's visibility rules. */
-static void show_page(int page)
-{
-    shell_show_page(page);
-    if (page == PAGE_DEVICE)
-    {
-        sync_backend();
-        sync_input_source();
-    }
-    else
-    {
-        load_edit_fields();
-    }
+    load_editor();
+    relayout();
 }
 
 /* ------------------------------------------------------------------ */
@@ -363,163 +604,6 @@ static void on_stop(void)
 }
 
 /* ------------------------------------------------------------------ */
-/* UI construction (fixed coordinates; P = tab page)                   */
-/* ------------------------------------------------------------------ */
-
-#define ADDP(p, cls, text, style, x, y, w, h, id)                                                  \
-    shell_add(hwnd, p, id, cls, text, style, x, y, w, h)
-#define EDITP(p, id, x, y, w, extra)                                                               \
-    ADDP(p, "EDIT", NULL, WS_BORDER | ES_AUTOHSCROLL | WS_TABSTOP | (extra), x, y, w, 22, id)
-#define COMBOP(p, id, x, y, w)                                                                     \
-    ADDP(p, "COMBOBOX", NULL, CBS_DROPDOWNLIST | WS_TABSTOP, x, y, w, 120, id)
-#define LABELP(p, txt, x, y, w) ADDP(p, "STATIC", txt, 0, x, y, w, 16, IDC_STATUS)
-#define LABELID(p, txt, x, y, w, id) ADDP(p, "STATIC", txt, 0, x, y, w, 16, id)
-#define CHECKP(p, txt, x, y, w, id)                                                                \
-    ADDP(p, "BUTTON", txt, BS_AUTOCHECKBOX | WS_TABSTOP, x, y, w, 20, id)
-#define PUSHP(p, txt, x, y, w, id)                                                                 \
-    ADDP(p, "BUTTON", txt, BS_PUSHBUTTON | WS_TABSTOP, x, y, w, 28, id)
-#define GROUPP(p, txt, x, y, w, h) ADDP(p, "BUTTON", txt, BS_GROUPBOX, x, y, w, h, IDC_STATUS)
-
-/** @brief Create the tab control, both pages, and the bottom bar. */
-static void build_ui(HWND hwnd)
-{
-    ADDP(-1, WC_TABCONTROL, NULL, WS_CLIPSIBLINGS, 6, 6, 668, 486, IDC_TAB);
-    TCITEMA ti = {0};
-    ti.mask = TCIF_TEXT;
-    ti.pszText = (LPSTR) "Channels";
-    TabCtrl_InsertItem(shell_hwnd(IDC_TAB), 0, &ti);
-    ti.pszText = (LPSTR) "Device and input";
-    TabCtrl_InsertItem(shell_hwnd(IDC_TAB), 1, &ti);
-
-    /* ---- Page 0: Channels ---------------------------------------- */
-    ADDP(
-        0,
-        "LISTBOX",
-        NULL,
-        WS_BORDER | WS_VSCROLL | LBS_NOTIFY | LBS_HASSTRINGS,
-        24,
-        48,
-        330,
-        314,
-        IDC_CH_LIST);
-    LABELP(0, "Frequency", 380, 50, 150);
-    EDITP(0, IDC_CH_FREQ, 380, 66, 150, 0);
-    LABELP(0, "Mode", 380, 96, 150);
-    COMBOP(0, IDC_CH_MODE, 380, 112, 150);
-    shell_combo_add(IDC_CH_MODE, "FM (narrow)");
-    shell_combo_add(IDC_CH_MODE, "WBFM");
-    shell_combo_add(IDC_CH_MODE, "AM");
-    shell_combo_add(IDC_CH_MODE, "USB");
-    shell_combo_add(IDC_CH_MODE, "LSB");
-    shell_combo_add(IDC_CH_MODE, "RAW");
-    ComboBox_SetCurSel(shell_hwnd(IDC_CH_MODE), 0);
-    LABELP(0, "Output", 380, 142, 150);
-    COMBOP(0, IDC_CH_OUT, 380, 158, 150);
-    shell_combo_add(IDC_CH_OUT, "TCP");
-    shell_combo_add(IDC_CH_OUT, "UDP");
-    shell_combo_add(IDC_CH_OUT, "File");
-    ComboBox_SetCurSel(shell_hwnd(IDC_CH_OUT), 0);
-    LABELID(0, "TCP port", 380, 192, 150, IDC_CH_LBL1);
-    EDITP(0, IDC_CH_FLD1, 380, 208, 220, 0);
-    LABELID(0, "UDP port", 380, 238, 150, IDC_CH_LBL2);
-    EDITP(0, IDC_CH_FLD2, 380, 254, 220, 0);
-    PUSHP(0, "Add", 380, 292, 70, IDC_CH_ADD);
-    PUSHP(0, "Update", 458, 292, 70, IDC_CH_UPDATE);
-    PUSHP(0, "Remove", 536, 292, 78, IDC_CH_REMOVE);
-    LABELP(0, "Command line", 24, 372, 150);
-    ADDP(
-        0,
-        "EDIT",
-        NULL,
-        WS_BORDER | WS_VSCROLL | ES_READONLY | ES_MULTILINE | ES_AUTOVSCROLL,
-        24,
-        390,
-        632,
-        60,
-        IDC_PREVIEW);
-
-    /* ---- Page 1: Device and input -------------------------------- */
-    GROUPP(1, "Device", 24, 42, 632, 70);
-    LABELP(1, "Backend", 40, 62, 52);
-    COMBOP(1, IDC_BACKEND, 100, 58, 220);
-    shell_combo_add(IDC_BACKEND, "RTL-SDR (rtl_multi)");
-    shell_combo_add(IDC_BACKEND, "SDRplay RSP (rsp_multi)");
-    ComboBox_SetCurSel(shell_hwnd(IDC_BACKEND), 0);
-    LABELP(1, "Device (-d)", 348, 62, 68);
-    EDITP(1, IDC_DEVICE, 420, 58, 120, 0);
-    LABELP(1, "(blank = first device)", 424, 84, 140);
-
-    GROUPP(1, "Rates and filters", 24, 120, 632, 70);
-    LABELP(1, "Capture rate (-s)", 40, 138, 100);
-    EDITP(1, IDC_RATE_IN, 40, 154, 80, 0);
-    LABELP(1, "Audio rate (-r)", 160, 138, 90);
-    EDITP(1, IDC_RATE_OUT, 160, 154, 80, 0);
-    LABELP(1, "Timeout s (-x)", 280, 138, 86);
-    EDITP(1, IDC_TIMEOUT, 280, 154, 50, 0);
-    CHECKP(1, "DC block", 380, 152, 80, IDC_DC);
-    CHECKP(1, "De-emphasis", 468, 152, 95, IDC_DEEMP);
-
-    GROUPP(1, "Receiver settings", 24, 198, 632, 70);
-    LABELP(1, "Gain dB (-g)", 40, 216, 76);
-    EDITP(1, IDC_RTL_GAIN, 40, 232, 70, ES_NUMBER);
-    LABELP(1, "PPM (-p)", 160, 216, 56);
-    EDITP(1, IDC_RTL_PPM, 160, 232, 50, ES_NUMBER);
-    CHECKP(1, "Bias-T (-T)", 240, 230, 82, IDC_BIASTEE);
-    LABELP(1, "Direct sampling", 344, 216, 92);
-    COMBOP(1, IDC_DIRECT, 344, 232, 140);
-    shell_combo_add(IDC_DIRECT, "Off");
-    shell_combo_add(IDC_DIRECT, "Direct (I)");
-    shell_combo_add(IDC_DIRECT, "Direct (Q)");
-    ComboBox_SetCurSel(shell_hwnd(IDC_DIRECT), 0);
-    LABELP(1, "gRdB 0-59 (-g)", 40, 216, 92);
-    EDITP(1, IDC_RSP_GRDB, 40, 232, 60, ES_NUMBER);
-    LABELP(1, "LNA state 0-2 (-L)", 160, 216, 106);
-    EDITP(1, IDC_RSP_LNA, 160, 232, 50, ES_NUMBER);
-    LABELP(1, "(blank gain = API AGC)", 250, 232, 150);
-
-    GROUPP(1, "Input source", 24, 276, 632, 96);
-    ADDP(
-        1,
-        "BUTTON",
-        "SDR device",
-        BS_AUTORADIOBUTTON | WS_GROUP | WS_TABSTOP,
-        40,
-        292,
-        100,
-        20,
-        IDC_SRC_DEVICE);
-    ADDP(
-        1,
-        "BUTTON",
-        "IQ file (-I)",
-        BS_AUTORADIOBUTTON | WS_TABSTOP,
-        160,
-        292,
-        95,
-        20,
-        IDC_SRC_FILE);
-    Button_SetCheck(shell_hwnd(IDC_SRC_DEVICE), BST_CHECKED);
-    LABELP(1, "Path:", 40, 318, 34);
-    EDITP(1, IDC_FILE_PATH, 78, 314, 360, 0);
-    PUSHP(1, "Browse...", 448, 312, 62, IDC_FILE_BROWSE);
-    LABELP(1, "Rate:", 40, 344, 34);
-    EDITP(1, IDC_FILE_RATE, 78, 340, 90, 0);
-    LABELP(1, "Center:", 190, 344, 44);
-    EDITP(1, IDC_FILE_CENTER, 238, 340, 90, 0);
-    LABELP(1, "(e.g. 2M and 100M)", 344, 344, 120);
-
-    GROUPP(1, "Record raw IQ (-R)", 24, 380, 632, 66);
-    LABELP(1, "CF32 file (blank = off)", 40, 398, 130);
-    EDITP(1, IDC_RECORD_PATH, 40, 414, 380, 0);
-    PUSHP(1, "Browse...", 430, 412, 62, IDC_RECORD_BROWSE);
-
-    /* ---- Bottom bar: status + launch ------------------------------ */
-    LABELP(-1, "Ready", 14, 506, 470);
-    ADDP(-1, "BUTTON", "Launch", BS_DEFPUSHBUTTON | WS_TABSTOP, 500, 498, 80, 28, IDC_LAUNCH);
-    ADDP(-1, "BUTTON", "Stop", BS_PUSHBUTTON | WS_TABSTOP, 590, 498, 80, 28, IDC_STOP);
-}
-
-/* ------------------------------------------------------------------ */
 /* Window procedure: event routing                                     */
 /* ------------------------------------------------------------------ */
 
@@ -529,10 +613,21 @@ static LRESULT CALLBACK wnd_proc(HWND hwnd, UINT msg, WPARAM wparam, LPARAM lpar
     {
     case WM_CREATE:
         g_main = hwnd;
-        build_ui(hwnd);
+        shell_create(hwnd, k_ctls, (int)(sizeof(k_ctls) / sizeof(k_ctls[0])));
+        shell_combo_add(IDC_BACKEND, "RTL-SDR (rtl_multi)");
+        shell_combo_add(IDC_BACKEND, "SDRplay RSP (rsp_multi)");
+        shell_combo_add(IDC_BACKEND, "IQ file replay (-I)");
+        ComboBox_SetCurSel(shell_hwnd(IDC_BACKEND), 0);
+        shell_combo_add(IDC_CH_MODE, "FM (narrow)");
+        shell_combo_add(IDC_CH_MODE, "WBFM");
+        shell_combo_add(IDC_CH_MODE, "AM");
+        shell_combo_add(IDC_CH_MODE, "USB");
+        shell_combo_add(IDC_CH_MODE, "LSB");
+        shell_combo_add(IDC_CH_MODE, "RAW");
+        shell_combo_add(IDC_CH_OUT, "TCP");
+        shell_combo_add(IDC_CH_OUT, "UDP");
+        shell_combo_add(IDC_CH_OUT, "File");
         SendMessage(shell_hwnd(IDC_PREVIEW), WM_SETFONT, (WPARAM)shell_apply_fonts(hwnd), FALSE);
-        sync_backend();
-        sync_input_source();
         /* one ready-made starting channel */
         strcpy(g_channels[0].freq, "100M");
         g_channels[0].mode = GUI_MODE_FM;
@@ -541,8 +636,8 @@ static LRESULT CALLBACK wnd_proc(HWND hwnd, UINT msg, WPARAM wparam, LPARAM lpar
         g_chan_count = 1;
         g_edit.output = GUI_OUT_TCP;
         reload_channel_list(0);
-        select_channel(0);
-        show_page(PAGE_CHANNELS);
+        load_editor();
+        relayout();
         refresh_preview();
         EnableWindow(shell_hwnd(IDC_STOP), FALSE);
         return 0;
@@ -551,7 +646,7 @@ static LRESULT CALLBACK wnd_proc(HWND hwnd, UINT msg, WPARAM wparam, LPARAM lpar
     {
         NMHDR *nm = (NMHDR *)lparam;
         if (nm->idFrom == IDC_TAB && nm->code == TCN_SELCHANGE)
-            show_page(TabCtrl_GetCurSel(shell_hwnd(IDC_TAB)));
+            relayout();
         return 0;
     }
 
@@ -563,24 +658,15 @@ static LRESULT CALLBACK wnd_proc(HWND hwnd, UINT msg, WPARAM wparam, LPARAM lpar
         case IDC_BACKEND:
             if (code == CBN_SELCHANGE)
             {
-                sync_backend();
-                refresh_preview();
-            }
-            return 0;
-        case IDC_SRC_DEVICE:
-        case IDC_SRC_FILE:
-            if (code == BN_CLICKED)
-            {
-                sync_input_source();
+                relayout();
                 refresh_preview();
             }
             return 0;
         case IDC_CH_OUT:
             if (code == CBN_SELCHANGE)
             {
-                stash_edit_fields();
                 g_edit.output = (gui_output_type_t)shell_combo_sel(IDC_CH_OUT);
-                load_edit_fields();
+                relayout();
                 refresh_preview();
             }
             return 0;
@@ -593,6 +679,10 @@ static LRESULT CALLBACK wnd_proc(HWND hwnd, UINT msg, WPARAM wparam, LPARAM lpar
             return 0;
         case IDC_FILE_BROWSE:
             shell_browse(g_main, IDC_FILE_PATH, 0);
+            refresh_preview();
+            return 0;
+        case IDC_CH_FILE_BROWSE:
+            shell_browse(g_main, IDC_CH_FILE, 0);
             refresh_preview();
             return 0;
         case IDC_RECORD_BROWSE:
@@ -638,11 +728,11 @@ static LRESULT CALLBACK wnd_proc(HWND hwnd, UINT msg, WPARAM wparam, LPARAM lpar
                 sizeof(g_channels[0]) * (size_t)(g_chan_count - sel - 1));
             g_chan_count--;
             if (g_chan_count == 0)
-            {
                 memset(&g_edit, 0, sizeof(g_edit));
-                shell_text_set(IDC_CH_FREQ, "");
-            }
+            else
+                select_channel(sel < g_chan_count ? sel : g_chan_count - 1);
             reload_channel_list(sel < g_chan_count ? sel : g_chan_count - 1);
+            relayout();
             refresh_preview();
             return 0;
         }
@@ -671,6 +761,7 @@ static LRESULT CALLBACK wnd_proc(HWND hwnd, UINT msg, WPARAM wparam, LPARAM lpar
     }
 
     case WM_CLOSE:
+        fprintf(stderr, "wnd_proc: WM_CLOSE (g_running=%d)\n", g_running);
         if (g_running && MessageBoxA(
                              hwnd,
                              "A backend process is running.\n"
@@ -682,6 +773,7 @@ static LRESULT CALLBACK wnd_proc(HWND hwnd, UINT msg, WPARAM wparam, LPARAM lpar
         return 0;
 
     case WM_DESTROY:
+        fprintf(stderr, "wnd_proc: WM_DESTROY\n");
         if (g_running)
         {
             TerminateProcess(g_pi.hProcess, (UINT)-1);
@@ -697,5 +789,5 @@ int WINAPI WinMain(HINSTANCE instance, HINSTANCE prev, LPSTR cmdline, int show)
 {
     (void)prev;
     (void)cmdline;
-    return shell_run(instance, "rxx_gui", "rxx_multi GUI", 680, 540, wnd_proc, show);
+    return shell_run(instance, "rxx_gui", "rxx_multi GUI", 680, wnd_proc, show);
 }

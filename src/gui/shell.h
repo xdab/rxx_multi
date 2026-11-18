@@ -1,35 +1,73 @@
 /**
  * @file shell.h
- * @brief Win32 plumbing for rxx_gui: control creation and lookup, fonts,
- * tab-page registry, common dialogs, and the message pump.
+ * @brief Win32 plumbing for rxx_gui: table-driven control creation, a flow
+ * layout engine, common dialogs, and the message pump.
  *
- * main.c owns the control-ID enum and all UI behavior; this module owns the
- * generic boilerplate those interactions sit on. Controls are created
- * through shell_add() and afterwards addressed by their integer ID alone.
+ * main.c owns the control-ID enum, the declarative control/layout tables and
+ * all UI behavior; this module owns the generic boilerplate. Controls are
+ * created from a shell_ctl_t table and addressed by their integer ID alone.
+ * Positioning is never hand-assigned: shell_layout() flows visible controls
+ * through rows and sections, so visibility toggles reflow automatically and
+ * overlapping stale geometry is impossible by construction.
  */
 #ifndef SHELL_H
 #define SHELL_H
 
 #include <windows.h>
 
+/** @brief Control creation table entry. */
+typedef struct
+{
+    int id, page;     /**< page < 0: not on a tab page (always visible) */
+    const char *cls;  /**< window class ("EDIT", "BUTTON", WC_TABCONTROL, ...) */
+    const char *text; /**< initial text (labels, captions; NULL for edits) */
+    DWORD style;      /**< extra styles beyond WS_CHILD | WS_VISIBLE */
+    int w, h;         /**< layout geometry; combos get h + dropdown room */
+} shell_ctl_t;
+
+/** @brief One control in a flow row; w < 0 stretches to the section end.
+ *  A zero id terminates the row. */
+typedef struct
+{
+    int id;
+    int w;
+} shell_item_t;
+
+/** @brief A row of controls laid out left to right; NULL items terminate
+ *  the section's row list. */
+typedef struct
+{
+    const shell_item_t *items;
+} shell_row_t;
+
 /**
- * @brief Create a child control and remember it under @p id.
+ * @brief A section of rows flowing in one of two columns.
  *
- * @param page tab page to file the control under for shell_show_page()
- *             (negative: not on any page, always visible)
- * @param id   control/command ID, also used as the child window ID
+ * With group_id != 0 a titled group box is drawn around the rows and the
+ * whole section vanishes when the group box is not visible().
  */
-HWND shell_add(
-    HWND parent,
-    int page,
-    int id,
-    const char *cls,
-    const char *text,
-    DWORD style,
-    int x,
-    int y,
-    int w,
-    int h);
+typedef struct
+{
+    int group_id;      /**< group box control ID, 0 = borderless section */
+    const char *title; /**< group box caption (group_id != 0 only) */
+    int col;           /**< 0 or 1: which column this section flows in */
+    int x, w;          /**< section geometry within the client area */
+    const shell_row_t *rows;
+} shell_group_t;
+
+/** @brief Create every control in the table (positions set by layout). */
+void shell_create(HWND parent, const shell_ctl_t *ctls, int n);
+
+/**
+ * @brief Position and show/hide all controls of @p page.
+ *
+ * Rows are flowed left-to-right, sections top-to-bottom per column; items
+ * whose visible() returns 0 take no space. Non-active-page controls are
+ * hidden.
+ *
+ * @return the content bottom y, for sizing the tab control and window
+ */
+int shell_layout(HWND parent, int page, const shell_group_t *groups, int n, int (*visible)(int id));
 
 /** @brief Handle for a previously created control ID (NULL if unknown). */
 HWND shell_hwnd(int id);
@@ -45,13 +83,6 @@ int shell_combo_sel(int id);
 /** @brief Checkbox/radio state as 0/1. */
 int shell_checked(int id);
 
-/** @brief Show/hide or enable/disable a list of control IDs. */
-void shell_show_ids(int on, int n, ...);
-void shell_enable_ids(int on, int n, ...);
-
-/** @brief Show only tab page @p page's controls and hide the other page's. */
-void shell_show_page(int page);
-
 /** @brief Common file dialog writing the picked path into control @p id. */
 void shell_browse(HWND owner, int id, int save);
 
@@ -64,17 +95,12 @@ HFONT shell_apply_fonts(HWND parent);
 /**
  * @brief Register the window class, create the main window, run the loop.
  *
- * Fixed-size window sized to a @p client_w x @p client_h client area.
+ * Fixed-width window sized to a @p client_w wide client area; height is set
+ * by the caller's layout pass.
  *
  * @return the message-loop exit code (-1 if window creation failed)
  */
 int shell_run(
-    HINSTANCE inst,
-    const char *cls,
-    const char *title,
-    int client_w,
-    int client_h,
-    WNDPROC proc,
-    int show);
+    HINSTANCE inst, const char *cls, const char *title, int client_w, WNDPROC proc, int show);
 
 #endif /* SHELL_H */
